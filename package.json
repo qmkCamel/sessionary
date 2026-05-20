@@ -34,5 +34,21 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.5"
-  }
+  },
+  "description": "Local-first AI coding session ledger for Codex and Claude Code sessions.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qmkCamel/sessionary.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/qmkCamel/sessionary/issues"
+  },
+  "homepage": "https://github.com/qmkCamel/sessionary#readme"
 }

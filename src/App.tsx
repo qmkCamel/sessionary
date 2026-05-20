@@ -21,7 +21,7 @@ import {
   Wrench,
   X
 } from "lucide-react";
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   exportReport,
   finishReview,
@@ -130,6 +130,115 @@ function sessionsInRange(ledger: DayLedger, range?: RangeSelection) {
     const sessionEnd = new Date(session.endedAt ?? session.startedAt).getTime();
     return sessionStart < end && sessionEnd > start;
   });
+}
+
+function openLoopCount(ledger: DayLedger) {
+  return ledger.metrics.unknownCount + ledger.metrics.needsReviewCount + ledger.metrics.needsRepairCount;
+}
+
+function humanTimeEstimateSeconds(ledger: DayLedger) {
+  return ledger.metrics.promptingSecondsEstimated + ledger.metrics.reviewSecondsEstimated + ledger.metrics.repairSecondsEstimated;
+}
+
+function prioritySessions(ledger: DayLedger) {
+  const priority: Record<SessionStatus, number> = {
+    needs_repair: 0,
+    needs_review: 1,
+    unknown: 2,
+    useful: 3,
+    repaired: 4,
+    failed: 5,
+    discarded: 6
+  };
+  return [...ledger.sessions]
+    .filter((session) => session.status === "unknown" || session.status === "needs_review" || session.status === "needs_repair")
+    .sort((left, right) => priority[left.status] - priority[right.status] || new Date(left.startedAt).getTime() - new Date(right.startedAt).getTime());
+}
+
+function SourceHealthChips({ ledger }: { ledger: DayLedger }) {
+  const t = useTranslation();
+  return (
+    <div className="source-summary" aria-label={t("settings.sources")}>
+      {ledger.sourceStatus.map((source) => (
+        <span className="source-pill" key={source.source}>
+          <span className={`source-dot ${source.source}`} />
+          <strong>{sourceLabels[source.source]}</strong>
+          <span>{source.enabled ? t("common.connected") : t("common.disabled")}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function WorkspaceHeader({
+  ledger,
+  scanning,
+  onRescan
+}: {
+  ledger: DayLedger;
+  scanning: boolean;
+  onRescan: () => void;
+}) {
+  const t = useTranslation();
+  return (
+    <header className="workspace-header">
+      <div className="workspace-status">
+        <SourceHealthChips ledger={ledger} />
+        <span className="freshness">
+          {t("common.lastScan")} {timeLabel(ledger.metrics.generatedAt, t)}
+        </span>
+      </div>
+      <button className="rescan-button" title={t("sources.rescan")} onClick={onRescan}>
+        <RefreshCw size={15} className={scanning ? "spin" : ""} />
+        <span>{t("sources.rescan")}</span>
+      </button>
+    </header>
+  );
+}
+
+function AppSidebar({
+  view,
+  date,
+  ledger,
+  error,
+  onDateChange,
+  onViewChange
+}: {
+  view: View;
+  date: string;
+  ledger: DayLedger;
+  error?: string;
+  onDateChange: (date: string) => void;
+  onViewChange: (view: View) => void;
+}) {
+  const t = useTranslation();
+  return (
+    <aside className="sidebar">
+      <div className="brand">
+        <strong>Sessionary</strong>
+        <span>{t("brand.tagline")}</span>
+      </div>
+      <input className="date-input" type="date" value={date} onChange={(event) => onDateChange(event.target.value)} />
+      <nav aria-label="Sessionary">
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          const badge = item.id === "inbox" ? openLoopCount(ledger) : undefined;
+          return (
+            <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => onViewChange(item.id)}>
+              <Icon size={17} />
+              <span>{t(item.labelKey)}</span>
+              {badge ? <small>{badge}</small> : null}
+            </button>
+          );
+        })}
+      </nav>
+      <div className="sidebar-footer">
+        <span>{t("common.localOnly")}</span>
+        <span>{ledger.sourceStatus.length} {t("settings.sources")}</span>
+      </div>
+      {error && <p className="sidebar-error">{error}</p>}
+    </aside>
+  );
 }
 
 function EmptyState({ title }: { title: string }) {
@@ -339,96 +448,139 @@ function TodayView({
   onNavigate: (view: View, filter?: Filter) => void;
 }) {
   const t = useTranslation();
+  const queue = prioritySessions(ledger);
+  const visibleQueue = queue.slice(0, 5);
   return (
-    <main className="workspace">
+    <main className="workspace today-workspace">
       <div className="page-title">
         <div>
           <p>{ledger.metrics.date}</p>
           <h1>{t("nav.today")}</h1>
+          <span>{t("today.openLoops")}</span>
         </div>
-        <span className="freshness">{t("common.updated")} {timeLabel(ledger.metrics.generatedAt, t)}</span>
+        <span className="status-chip needs_review">{openLoopCount(ledger)} {t("today.needsAttention")}</span>
       </div>
 
       <div className="metrics-grid">
-        <Metric label={t("metric.projects")} value={ledger.metrics.projectCount} />
-        <Metric label={t("metric.sessions")} value={ledger.metrics.sessionCount} />
-        <Metric label={t("metric.aiWaiting")} value={secondsLabel(ledger.metrics.aiWaitingSecondsEstimated)} hint={t("metric.estimated")} />
-        <Metric label={t("metric.prompting")} value={secondsLabel(ledger.metrics.promptingSecondsEstimated)} hint={t("metric.estimated")} />
-        <Metric label={t("metric.review")} value={secondsLabel(ledger.metrics.reviewSecondsEstimated)} hint={t("metric.estimated")} />
-        <Metric label={t("metric.repair")} value={secondsLabel(ledger.metrics.repairSecondsEstimated)} hint={t("metric.estimated")} />
+        <Metric label={t("today.reviewQueue")} value={openLoopCount(ledger)} />
+        <Metric label={t("metric.repair")} value={ledger.metrics.needsRepairCount} />
         <Metric label={t("metric.parallel")} value={secondsLabel(ledger.metrics.parallelSeconds)} />
-        <Metric label={t("metric.maxAgents")} value={ledger.metrics.maxConcurrentSessions} />
+        <Metric label={t("today.humanTime")} value={secondsLabel(humanTimeEstimateSeconds(ledger))} hint={t("metric.estimated")} />
       </div>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h2>{t("timeline.sessionTimeline")}</h2>
-          <div className="segmented-control">
-            {([15, 30, 60] as ZoomMinutes[]).map((zoom) => (
-              <button key={zoom} className={zoomMinutes === zoom ? "active" : ""} onClick={() => onZoom(zoom)}>
-                {zoom}m
-              </button>
-            ))}
-          </div>
-        </div>
-        <TimelineCanvas
-          ledger={ledger}
-          selectedId={selectedId}
-          zoomMinutes={zoomMinutes}
-          selectedOverlap={selectedOverlap}
-          selectedRange={selectedRange}
-          onSelect={onSelect}
-          onOverlapSelect={onOverlapSelect}
-          onRangeSelect={onRangeSelect}
-        />
-      </section>
-
-      <div className="split-grid">
-        <section className="panel">
+      <div className="today-primary-grid">
+        <section className="panel review-queue-panel">
           <div className="panel-header">
-            <h2>{t("metric.projects")}</h2>
-            <span>{ledger.projects.filter((project) => project.isParallel).length} {t("common.parallel")}</span>
+            <h2>{t("today.reviewQueue")}</h2>
+            <span>{t("today.nextActions")}</span>
           </div>
-          <div className="project-list">
-            {ledger.projects.map((project) => (
-              <button
-                key={project.path}
-                className="project-item"
-                onClick={() => onSelect(ledger.sessions.find((session) => session.projectPath === project.path) ?? ledger.sessions[0])}
-              >
-                <span>
-                  <strong>{project.name}</strong>
-                  <small>{project.path}</small>
-                </span>
-                <span className="project-meta">
-                  <GitBranch size={14} />
-                  {project.gitBranch ?? t("common.noBranch")}
-                </span>
-                <span className={project.isParallel ? "parallel-tag" : "quiet-tag"}>
-                  {project.isParallel ? t("common.parallel") : t("common.solo")}
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <div className="panel-header">
-            <h2>{t("nav.inbox")}</h2>
-            <span>{ledger.metrics.unknownCount + ledger.metrics.needsReviewCount + ledger.metrics.needsRepairCount} {t("inbox.open")}</span>
+          <div className="review-queue">
+            {visibleQueue.length === 0 ? (
+              <EmptyState title={t("inbox.clear")} />
+            ) : (
+              visibleQueue.map((session) => (
+                <button
+                  className={`queue-card ${selectedId === session.id ? "selected" : ""}`}
+                  key={session.id}
+                  onClick={() => onSelect(session)}
+                >
+                  <span className={`source-dot ${session.source}`} />
+                  <span>
+                    <strong>{session.projectName}</strong>
+                    <small>{t(statusKeys[session.status])} · {secondsLabel(session.durationSeconds)} · {session.toolCallCount} {t("common.tools")}</small>
+                  </span>
+                  <span className={`status-chip ${session.status}`}>{t(statusKeys[session.status])}</span>
+                </button>
+              ))
+            )}
           </div>
           <div className="queue-actions">
             <button onClick={() => onNavigate("inbox", "unknown")}>{t("status.unknown")} {ledger.metrics.unknownCount}</button>
             <button onClick={() => onNavigate("inbox", "needs_review")}>{t("inbox.review")} {ledger.metrics.needsReviewCount}</button>
             <button onClick={() => onNavigate("inbox", "needs_repair")}>{t("inbox.repair")} {ledger.metrics.needsRepairCount}</button>
           </div>
-          <div className="compact-list">
-            {ledger.sessions.slice(0, 5).map((session) => (
-              <SessionPill key={session.id} session={session} selected={selectedId === session.id} onSelect={() => onSelect(session)} />
-            ))}
+        </section>
+
+        <section className="panel timeline-preview-panel">
+          <div className="panel-header">
+            <h2>{t("today.dayTimeline")}</h2>
+            <div className="segmented-control">
+              {([15, 30, 60] as ZoomMinutes[]).map((zoom) => (
+                <button key={zoom} className={zoomMinutes === zoom ? "active" : ""} onClick={() => onZoom(zoom)}>
+                  {zoom}m
+                </button>
+              ))}
+            </div>
           </div>
+          <TimelineCanvas
+            ledger={ledger}
+            selectedId={selectedId}
+            zoomMinutes={zoomMinutes}
+            selectedOverlap={selectedOverlap}
+            selectedRange={selectedRange}
+            onSelect={onSelect}
+            onOverlapSelect={onOverlapSelect}
+            onRangeSelect={onRangeSelect}
+          />
         </section>
       </div>
+
+      <section className="panel project-work-panel">
+        <div className="panel-header">
+          <h2>{t("today.projectWork")}</h2>
+          <span>{ledger.projects.filter((project) => project.isParallel).length} {t("common.parallel")}</span>
+        </div>
+        <div className="project-table">
+          <div className="project-table-row table-head">
+            <span>{t("metric.projects")}</span>
+            <span>{t("metric.sessions")}</span>
+            <span>{t("metric.aiWaiting")}</span>
+            <span>{t("metric.review")}</span>
+            <span>{t("metric.parallel")}</span>
+            <span>{t("common.status")}</span>
+          </div>
+          {ledger.projects.map((project) => {
+            const projectSessions = ledger.sessions.filter((session) => session.projectPath === project.path);
+            const waiting = projectSessions.reduce((total, session) => total + session.waitingSeconds, 0);
+            const review = projectSessions.reduce((total, session) => total + session.reviewSeconds, 0);
+            const hasRepair = projectSessions.some((session) => session.status === "needs_repair");
+            const hasReview = projectSessions.some((session) => session.status === "needs_review" || session.status === "unknown");
+            const status = hasRepair ? "needs_repair" : hasReview ? "needs_review" : "useful";
+            return (
+              <button
+                key={project.path}
+                className="project-table-row"
+                onClick={() => onSelect(projectSessions[0] ?? ledger.sessions[0])}
+              >
+                <span className="project-name">
+                  <GitBranch size={14} />
+                  <span>
+                    <strong>{project.name}</strong>
+                    <small>{project.path}</small>
+                  </span>
+                </span>
+                <span>{project.sessionCount}</span>
+                <span>{secondsLabel(waiting)}</span>
+                <span>{secondsLabel(review)}</span>
+                <span>{project.isParallel ? secondsLabel(project.activeSeconds) : "0m"}</span>
+                <span className={`status-chip ${status}`}>{t(statusKeys[status])}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="panel recent-sessions-panel">
+        <div className="panel-header">
+          <h2>{t("nav.inbox")}</h2>
+          <span>{ledger.metrics.sessionCount} {t("common.sessions")}</span>
+        </div>
+        <div className="compact-list">
+          {ledger.sessions.slice(0, 5).map((session) => (
+            <SessionPill key={session.id} session={session} selected={selectedId === session.id} onSelect={() => onSelect(session)} />
+          ))}
+        </div>
+      </section>
     </main>
   );
 }
@@ -441,7 +593,8 @@ function InboxView({
   onFilter,
   onSearch,
   onSelect,
-  onStatus
+  onStatus,
+  inspector
 }: {
   ledger: DayLedger;
   selected?: SessionRecord;
@@ -451,6 +604,7 @@ function InboxView({
   onSearch: (search: string) => void;
   onSelect: (session: SessionRecord) => void;
   onStatus: (session: SessionRecord, status: SessionStatus) => Promise<void>;
+  inspector: ReactNode;
 }) {
   const t = useTranslation();
   const [recentlyUpdatedId, setRecentlyUpdatedId] = useState<string>();
@@ -472,69 +626,75 @@ function InboxView({
   };
 
   return (
-    <main className="workspace">
-      <div className="page-title">
-        <div>
-          <p>{ledger.metrics.date}</p>
-          <h1>{t("nav.inbox")}</h1>
-        </div>
-        <div className="search-box">
-          <Search size={16} />
-          <input value={search} onChange={(event) => onSearch(event.target.value)} placeholder={t("inbox.search")} />
-        </div>
-      </div>
+    <main className="workspace inbox-workspace">
+      <div className="inbox-layout">
+        <div className="inbox-main">
+          <div className="page-title">
+            <div>
+              <p>{ledger.metrics.date}</p>
+              <h1>{t("nav.inbox")}</h1>
+              <span>{t("inbox.subhead")}</span>
+            </div>
+            <div className="search-box">
+              <Search size={16} />
+              <input value={search} onChange={(event) => onSearch(event.target.value)} placeholder={t("inbox.search")} />
+            </div>
+          </div>
 
-      <div className="filter-bar">
-        {(["all", "unknown", "useful", "needs_review", "needs_repair", "discarded"] as Filter[]).map((item) => (
-          <button key={item} className={filter === item ? "active" : ""} onClick={() => onFilter(item)}>
-            {item === "all" ? t("common.all") : t(statusKeys[item])}
-          </button>
-        ))}
-      </div>
+          <div className="filter-bar">
+            {(["all", "unknown", "useful", "needs_review", "needs_repair", "discarded"] as Filter[]).map((item) => (
+              <button key={item} className={filter === item ? "active" : ""} onClick={() => onFilter(item)}>
+                {item === "all" ? t("common.all") : t(statusKeys[item])}
+              </button>
+            ))}
+          </div>
 
-      <section className="panel inbox-panel">
-        {filtered.length === 0 ? (
-          <EmptyState title={t("inbox.clear")} />
-        ) : (
-          filtered.map((session) => (
-            <article className={`inbox-card ${selected?.id === session.id ? "selected" : ""}`} key={session.id} onClick={() => onSelect(session)}>
-              <div className="inbox-card-main">
-                <span className={`source-dot ${session.source}`} />
-                <div>
-                  <h2>{session.summary || session.sourceSessionId}</h2>
-                  <p>
-                    {sourceLabels[session.source]} · {session.projectName} · {timeLabel(session.startedAt, t)}-{timeLabel(session.endedAt, t)}
-                  </p>
-                </div>
-              </div>
-              <div className="session-stats">
-                <span>{session.userMessageCount} {t("inbox.prompts")}</span>
-                <span>{session.assistantMessageCount} {t("inbox.replies")}</span>
-                <span>{session.toolCallCount} {t("common.tools")}</span>
-                <span>{secondsLabel(session.durationSeconds)}</span>
-              </div>
-              <div className="quick-actions" onClick={(event) => event.stopPropagation()}>
-                <button title={t("status.useful")} onClick={() => void markStatus(session, "useful")}>
-                  <Check size={16} />
-                </button>
-                <button title={t("status.needs_review")} onClick={() => void markStatus(session, "needs_review")}>
-                  <AlertCircle size={16} />
-                </button>
-                <button title={t("status.needs_repair")} onClick={() => void markStatus(session, "needs_repair")}>
-                  <Wrench size={16} />
-                </button>
-                <button title={t("status.discarded")} onClick={() => void markStatus(session, "discarded")}>
-                  <X size={16} />
-                </button>
-              </div>
-              <span className={`status-chip ${session.status}`}>
-                {statusIcon(session.status)}
-                {t(statusKeys[session.status])}
-              </span>
-            </article>
-          ))
-        )}
-      </section>
+          <section className="panel inbox-panel">
+            {filtered.length === 0 ? (
+              <EmptyState title={t("inbox.clear")} />
+            ) : (
+              filtered.map((session) => (
+                <article className={`inbox-card ${selected?.id === session.id ? "selected" : ""}`} key={session.id} onClick={() => onSelect(session)}>
+                  <div className="inbox-card-main">
+                    <span className={`source-dot ${session.source}`} />
+                    <div>
+                      <h2>{session.summary || session.sourceSessionId}</h2>
+                      <p>
+                        {sourceLabels[session.source]} · {session.projectName} · {timeLabel(session.startedAt, t)}-{timeLabel(session.endedAt, t)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="session-stats">
+                    <span>{session.userMessageCount} {t("inbox.prompts")}</span>
+                    <span>{session.assistantMessageCount} {t("inbox.replies")}</span>
+                    <span>{session.toolCallCount} {t("common.tools")}</span>
+                    <span>{secondsLabel(session.durationSeconds)}</span>
+                  </div>
+                  <div className="quick-actions" onClick={(event) => event.stopPropagation()}>
+                    <button title={t("status.useful")} onClick={() => void markStatus(session, "useful")}>
+                      <Check size={16} />
+                    </button>
+                    <button title={t("status.needs_review")} onClick={() => void markStatus(session, "needs_review")}>
+                      <AlertCircle size={16} />
+                    </button>
+                    <button title={t("status.needs_repair")} onClick={() => void markStatus(session, "needs_repair")}>
+                      <Wrench size={16} />
+                    </button>
+                    <button title={t("status.discarded")} onClick={() => void markStatus(session, "discarded")}>
+                      <X size={16} />
+                    </button>
+                  </div>
+                  <span className={`status-chip ${session.status}`}>
+                    {statusIcon(session.status)}
+                    {t(statusKeys[session.status])}
+                  </span>
+                </article>
+              ))
+            )}
+          </section>
+        </div>
+        <aside className="page-inspector inbox-inspector">{inspector}</aside>
+      </div>
     </main>
   );
 }
@@ -548,7 +708,8 @@ function ProjectTimelineView({
   onZoom,
   onSelect,
   onOverlapSelect,
-  onRangeSelect
+  onRangeSelect,
+  inspector
 }: {
   ledger: DayLedger;
   selectedId?: string;
@@ -559,13 +720,14 @@ function ProjectTimelineView({
   onSelect: (session: SessionRecord) => void;
   onOverlapSelect: (overlap: OverlapInterval) => void;
   onRangeSelect: (range: RangeSelection) => void;
+  inspector?: ReactNode;
 }) {
   const t = useTranslation();
   const rangeSessions = sessionsInRange(ledger, selectedRange);
   const rangeProjects = [...new Set(rangeSessions.map((session) => session.projectName))];
 
   return (
-    <main className="workspace">
+    <main className="workspace timeline-workspace">
       <div className="page-title">
         <div>
           <p>{ledger.metrics.date}</p>
@@ -576,34 +738,38 @@ function ProjectTimelineView({
         </span>
       </div>
 
-      <section className="panel tall">
-        <div className="timeline-toolbar">
-          <div className="segmented-control">
-            {([15, 30, 60] as ZoomMinutes[]).map((zoom) => (
-              <button key={zoom} className={zoomMinutes === zoom ? "active" : ""} onClick={() => onZoom(zoom)}>
-                {zoom}m
-              </button>
-            ))}
+      <div className={`timeline-layout ${inspector ? "with-inspector" : ""}`}>
+        <section className="panel tall timeline-canvas-panel">
+          <div className="timeline-toolbar">
+            <div className="segmented-control">
+              {([15, 30, 60] as ZoomMinutes[]).map((zoom) => (
+                <button key={zoom} className={zoomMinutes === zoom ? "active" : ""} onClick={() => onZoom(zoom)}>
+                  {zoom}m
+                </button>
+              ))}
+            </div>
+            {selectedRange && (
+              <span>
+                {timeLabel(selectedRange.startedAt, t)}-{timeLabel(selectedRange.endedAt, t)} · {rangeSessions.length} {t("common.sessions")} · {rangeProjects.length} {t("metric.projects")}
+              </span>
+            )}
           </div>
-          {selectedRange && (
-            <span>
-              {timeLabel(selectedRange.startedAt, t)}-{timeLabel(selectedRange.endedAt, t)} · {rangeSessions.length} {t("common.sessions")} · {rangeProjects.length} {t("metric.projects")}
-            </span>
-          )}
-        </div>
-        <TimelineCanvas
-          ledger={ledger}
-          selectedId={selectedId}
-          zoomMinutes={zoomMinutes}
-          selectedOverlap={selectedOverlap}
-          selectedRange={selectedRange}
-          onSelect={onSelect}
-          onOverlapSelect={onOverlapSelect}
-          onRangeSelect={onRangeSelect}
-        />
-      </section>
+          <TimelineCanvas
+            ledger={ledger}
+            selectedId={selectedId}
+            zoomMinutes={zoomMinutes}
+            selectedOverlap={selectedOverlap}
+            selectedRange={selectedRange}
+            onSelect={onSelect}
+            onOverlapSelect={onOverlapSelect}
+            onRangeSelect={onRangeSelect}
+          />
+        </section>
 
-      <section className="panel">
+        {inspector && <aside className="page-inspector timeline-inspector">{inspector}</aside>}
+      </div>
+
+      <section className="panel overlap-summary-panel">
         <div className="panel-header">
           <h2>{t("projectTimeline.overlapSummary")}</h2>
           <span>{ledger.overlaps.length} {t("projectTimeline.intervals")}</span>
@@ -612,7 +778,7 @@ function ProjectTimelineView({
           {ledger.overlaps.length === 0 ? (
             <EmptyState title={t("projectTimeline.noParallel")} />
           ) : (
-            ledger.overlaps.map((overlap) => (
+            ledger.overlaps.slice(0, 4).map((overlap) => (
               <button
                 key={`${overlap.startedAt}-${overlap.endedAt}`}
                 className={overlapsEqual(selectedOverlap, overlap) ? "selected" : ""}
@@ -631,6 +797,90 @@ function ProjectTimelineView({
         </div>
       </section>
     </main>
+  );
+}
+
+function ReportOverview({ ledger }: { ledger: DayLedger }) {
+  const t = useTranslation();
+  const totalTime =
+    ledger.metrics.promptingSecondsEstimated +
+    ledger.metrics.aiWaitingSecondsEstimated +
+    ledger.metrics.reviewSecondsEstimated +
+    ledger.metrics.repairSecondsEstimated;
+  const topProjects = [...ledger.projects].sort((left, right) => right.activeSeconds - left.activeSeconds).slice(0, 5);
+
+  return (
+    <aside className="report-overview">
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("report.keyMetrics")}</h2>
+        </div>
+        <dl className="overview-list">
+          <div>
+            <dt>{t("metric.projects")}</dt>
+            <dd>{ledger.metrics.projectCount}</dd>
+          </div>
+          <div>
+            <dt>{t("metric.sessions")}</dt>
+            <dd>{ledger.metrics.sessionCount}</dd>
+          </div>
+          <div>
+            <dt>{t("status.needs_review")}</dt>
+            <dd>{ledger.metrics.needsReviewCount}</dd>
+          </div>
+          <div>
+            <dt>{t("status.needs_repair")}</dt>
+            <dd>{ledger.metrics.needsRepairCount}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("report.timeTotal")}</h2>
+          <span>{secondsLabel(totalTime)}</span>
+        </div>
+        <dl className="overview-list">
+          <div>
+            <dt>{t("metric.prompting")}</dt>
+            <dd>{secondsLabel(ledger.metrics.promptingSecondsEstimated)}</dd>
+          </div>
+          <div>
+            <dt>{t("metric.aiWaiting")}</dt>
+            <dd>{secondsLabel(ledger.metrics.aiWaitingSecondsEstimated)}</dd>
+          </div>
+          <div>
+            <dt>{t("metric.review")}</dt>
+            <dd>{secondsLabel(ledger.metrics.reviewSecondsEstimated)}</dd>
+          </div>
+          <div>
+            <dt>{t("metric.repair")}</dt>
+            <dd>{secondsLabel(ledger.metrics.repairSecondsEstimated)}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("report.topProjects")}</h2>
+        </div>
+        <div className="compact-list">
+          {topProjects.map((project, index) => (
+            <div className="overview-row" key={project.path}>
+              <span>{index + 1}. {project.name}</span>
+              <strong>{secondsLabel(project.activeSeconds)}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel privacy-panel">
+        <div className="panel-header">
+          <h2>{t("common.localOnly")}</h2>
+        </div>
+        <p>{t("report.privacyNote")}</p>
+      </section>
+    </aside>
   );
 }
 
@@ -671,8 +921,13 @@ function ReportView({
           </button>
         </div>
       </div>
-      <textarea className="report-editor" value={markdown} onChange={(event) => onChange(event.target.value)} />
-      {exportedPath && <p className="export-path">{t("report.exportedTo")} {exportedPath}</p>}
+      <div className="report-layout">
+        <section className="report-document">
+          <textarea className="report-editor" value={markdown} onChange={(event) => onChange(event.target.value)} />
+          {exportedPath && <p className="export-path">{t("report.exportedTo")} {exportedPath}</p>}
+        </section>
+        <ReportOverview ledger={ledger} />
+      </div>
     </main>
   );
 }
@@ -1243,121 +1498,98 @@ export function App() {
     );
   }
 
+  const detailPanel = (
+    <DetailPanel
+      session={selected}
+      ledger={ledger}
+      overlap={selectedOverlap}
+      range={selectedRange}
+      onPatch={(session, patch) => void applyPatch(session, patch)}
+      onSelect={selectSession}
+      onStartReview={(session) => void runStartReview(session)}
+      onFinishReview={(session, status) => void runFinishReview(session, status)}
+    />
+  );
+
   return (
     <TranslationContext.Provider value={t}>
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <strong>Sessionary</strong>
-          <span>{t("brand.tagline")}</span>
-        </div>
-        <input className="date-input" type="date" value={date} onChange={(event) => void load(event.target.value)} />
-        <nav>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
-                <Icon size={17} />
-                {t(item.labelKey)}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="sources">
-          <div className="sources-header">
-            <span>{t("settings.sources")}</span>
-            <button title={t("sources.rescan")} onClick={() => void load(date, true)}>
-              <RefreshCw size={15} className={scanning ? "spin" : ""} />
-            </button>
-          </div>
-          {ledger.sourceStatus.map((source) => (
-            <div className="source-status" key={source.source}>
-              <span className={`source-dot ${source.source}`} />
-              <div>
-                <strong>{sourceLabels[source.source]}</strong>
-                <small>
-                  {source.enabled ? `${source.sessionsFound} ${t("common.sessions")} · ${source.errors} ${t("common.errors")}` : t("common.disabled")}
-                </small>
-              </div>
-            </div>
-          ))}
-        </div>
-        {error && <p className="sidebar-error">{error}</p>}
-      </aside>
+      <div className="app-shell">
+        <AppSidebar
+          view={view}
+          date={date}
+          ledger={ledger}
+          error={error}
+          onDateChange={(nextDate) => void load(nextDate)}
+          onViewChange={setView}
+        />
+        <section className="app-workspace">
+          <WorkspaceHeader ledger={ledger} scanning={scanning} onRescan={() => void load(date, true)} />
 
-      {view === "today" && (
-        <TodayView
-          ledger={ledger}
-          selectedId={selected?.id}
-          zoomMinutes={zoomMinutes}
-          selectedOverlap={selectedOverlap}
-          selectedRange={selectedRange}
-          onZoom={setZoomMinutes}
-          onSelect={selectSession}
-          onOverlapSelect={selectOverlap}
-          onRangeSelect={selectRange}
-          onNavigate={openView}
-        />
-      )}
-      {view === "inbox" && (
-        <InboxView
-          ledger={ledger}
-          selected={selected}
-          filter={filter}
-          search={search}
-          onFilter={setFilter}
-          onSearch={setSearch}
-          onSelect={selectSession}
-          onStatus={(session, status) => applyPatch(session, { status })}
-        />
-      )}
-      {view === "timeline" && (
-        <ProjectTimelineView
-          ledger={ledger}
-          selectedId={selected?.id}
-          zoomMinutes={zoomMinutes}
-          selectedOverlap={selectedOverlap}
-          selectedRange={selectedRange}
-          onZoom={setZoomMinutes}
-          onSelect={selectSession}
-          onOverlapSelect={selectOverlap}
-          onRangeSelect={selectRange}
-        />
-      )}
-      {view === "report" && (
-        <ReportView
-          ledger={ledger}
-          markdown={markdown}
-          exportedPath={exportedPath}
-          onGenerate={refreshReport}
-          onChange={setMarkdown}
-          onCopy={() => void navigator.clipboard.writeText(markdown)}
-          onExport={async () => {
-            const result = await exportReport(ledger.metrics.date, markdown, locale);
-            setExportedPath(result.exportedPath);
-          }}
-        />
-      )}
-      {view === "settings" && settingsState && (
-        <SettingsView
-          settings={settingsState}
-          onChange={setSettingsState}
-          onSave={() => void persistSettings()}
-          onScan={() => void saveAndScanSettings()}
-        />
-      )}
-
-      <DetailPanel
-        session={selected}
-        ledger={ledger}
-        overlap={selectedOverlap}
-        range={selectedRange}
-        onPatch={(session, patch) => void applyPatch(session, patch)}
-        onSelect={selectSession}
-        onStartReview={(session) => void runStartReview(session)}
-        onFinishReview={(session, status) => void runFinishReview(session, status)}
-      />
-    </div>
+          {view === "today" && (
+            <TodayView
+              ledger={ledger}
+              selectedId={selected?.id}
+              zoomMinutes={zoomMinutes}
+              selectedOverlap={selectedOverlap}
+              selectedRange={selectedRange}
+              onZoom={setZoomMinutes}
+              onSelect={selectSession}
+              onOverlapSelect={selectOverlap}
+              onRangeSelect={selectRange}
+              onNavigate={openView}
+            />
+          )}
+          {view === "inbox" && (
+            <InboxView
+              ledger={ledger}
+              selected={selected}
+              filter={filter}
+              search={search}
+              onFilter={setFilter}
+              onSearch={setSearch}
+              onSelect={selectSession}
+              onStatus={(session, status) => applyPatch(session, { status })}
+              inspector={detailPanel}
+            />
+          )}
+          {view === "timeline" && (
+            <ProjectTimelineView
+              ledger={ledger}
+              selectedId={selected?.id}
+              zoomMinutes={zoomMinutes}
+              selectedOverlap={selectedOverlap}
+              selectedRange={selectedRange}
+              onZoom={setZoomMinutes}
+              onSelect={selectSession}
+              onOverlapSelect={selectOverlap}
+              onRangeSelect={selectRange}
+              inspector={selected || selectedOverlap || selectedRange ? detailPanel : undefined}
+            />
+          )}
+          {view === "report" && (
+            <ReportView
+              ledger={ledger}
+              markdown={markdown}
+              exportedPath={exportedPath}
+              onGenerate={refreshReport}
+              onChange={setMarkdown}
+              onCopy={() => void navigator.clipboard.writeText(markdown)}
+              onExport={async () => {
+                const result = await exportReport(ledger.metrics.date, markdown, locale);
+                setExportedPath(result.exportedPath);
+              }}
+            />
+          )}
+          {view === "settings" && settingsState && (
+            <SettingsView
+              settings={settingsState}
+              onChange={setSettingsState}
+              onSave={() => void persistSettings()}
+              onScan={() => void saveAndScanSettings()}
+            />
+          )}
+        </section>
+      </div>
     </TranslationContext.Provider>
   );
 }

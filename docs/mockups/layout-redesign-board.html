@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sessionary Layout Redesign Board</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7f4;
+        --surface: #ffffff;
+        --surface-soft: #fafbf8;
+        --line: #d9ded8;
+        --line-strong: #c6d0c9;
+        --ink: #172123;
+        --muted: #64706f;
+        --teal: #027d7c;
+        --blue: #2166c2;
+        --amber: #c26f11;
+        --red: #d94363;
+        --green: #218653;
+        --purple: #7357d6;
+        --shadow: 0 18px 42px rgba(28, 38, 35, 0.08);
+        font-family: Inter, "Avenir Next", "Segoe UI", system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #e8ebe6;
+        color: var(--ink);
+      }
+
+      .board {
+        display: grid;
+        gap: 32px;
+        padding: 32px;
+      }
+
+      .frame {
+        width: 1440px;
+        height: 900px;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: 248px minmax(0, 1fr);
+        border: 1px solid #cfd6d0;
+        border-radius: 12px;
+        background: var(--bg);
+        box-shadow: 0 30px 90px rgba(28, 38, 35, 0.18);
+      }
+
+      .sidebar {
+        display: grid;
+        grid-template-rows: auto auto 1fr auto;
+        gap: 22px;
+        padding: 22px 16px;
+        border-right: 1px solid var(--line);
+        background: rgba(251, 252, 249, 0.92);
+      }
+
+      .brand,
+      .date-pill,
+      .nav-item,
+      .status-strip,
+      .workspace-header,
+      .row,
+      .chip,
+      .tool-button,
+      .metric,
+      .queue-card,
+      .source-summary {
+        display: flex;
+        align-items: center;
+      }
+
+      .brand {
+        gap: 10px;
+      }
+
+      .mark {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: #111819;
+        color: #fff;
+        font-weight: 800;
+      }
+
+      .brand strong {
+        display: block;
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      .brand small,
+      .date-pill,
+      .nav-item small,
+      .status-strip,
+      .source-summary,
+      .muted,
+      .label,
+      .table-head {
+        color: var(--muted);
+      }
+
+      .date-pill {
+        justify-content: space-between;
+        height: 38px;
+        padding: 0 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        font-size: 13px;
+      }
+
+      .nav {
+        display: grid;
+        align-content: start;
+        gap: 4px;
+      }
+
+      .nav-item {
+        gap: 10px;
+        height: 40px;
+        min-height: 40px;
+        padding: 0 10px;
+        border-radius: 8px;
+        font-size: 14px;
+      }
+
+      .nav-item.active {
+        border: 1px solid rgba(2, 125, 124, 0.24);
+        background: #e7f3f1;
+        color: #026d6c;
+        font-weight: 700;
+      }
+
+      .icon {
+        width: 18px;
+        height: 18px;
+        display: grid;
+        place-items: center;
+        border-radius: 5px;
+        color: currentColor;
+      }
+
+      .status-strip {
+        justify-content: space-between;
+        gap: 10px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: var(--green);
+      }
+
+      .workspace {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .workspace-header {
+        justify-content: space-between;
+        gap: 18px;
+        height: 72px;
+        padding: 0 28px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.68);
+      }
+
+      .source-summary {
+        gap: 12px;
+        font-size: 12px;
+      }
+
+      .source-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        color: #2d393a;
+      }
+
+      .tool-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .tool-button {
+        justify-content: center;
+        min-width: 36px;
+        height: 36px;
+        padding: 0 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .primary {
+        border-color: #036f6e;
+        background: #027d7c;
+        color: #fff;
+      }
+
+      .content {
+        min-width: 0;
+        padding: 26px 28px 30px;
+        overflow: hidden;
+      }
+
+      .page-title {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 30px;
+        letter-spacing: 0;
+        line-height: 1.05;
+      }
+
+      h2 {
+        font-size: 15px;
+        line-height: 1.2;
+      }
+
+      h3 {
+        font-size: 13px;
+      }
+
+      .subhead {
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .metric {
+        justify-content: space-between;
+        min-height: 78px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 6px;
+        font-size: 28px;
+        line-height: 1;
+      }
+
+      .metric .spark {
+        width: 44px;
+        height: 24px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(2, 125, 124, 0.22), rgba(33, 102, 194, 0.14));
+      }
+
+      .today-grid {
+        display: grid;
+        grid-template-columns: 360px minmax(0, 1fr);
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .panel {
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.86);
+        box-shadow: var(--shadow);
+      }
+
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 48px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .queue-list {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+      }
+
+      .queue-card {
+        align-items: start;
+        gap: 10px;
+        min-height: 72px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      .queue-card.selected {
+        border-color: rgba(33, 102, 194, 0.42);
+        background: #eef5ff;
+      }
+
+      .queue-card strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 13px;
+      }
+
+      .queue-card p {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .status-dot {
+        width: 10px;
+        height: 10px;
+        margin-top: 4px;
+        border-radius: 999px;
+        background: var(--amber);
+        flex: 0 0 auto;
+      }
+
+      .status-dot.red {
+        background: var(--red);
+      }
+
+      .status-dot.blue {
+        background: var(--blue);
+      }
+
+      .timeline-panel {
+        height: 346px;
+      }
+
+      .timeline {
+        display: grid;
+        grid-template-columns: 140px minmax(0, 1fr);
+        gap: 0;
+        padding: 10px 14px 16px;
+      }
+
+      .ruler {
+        grid-column: 2;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        height: 28px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .track-label {
+        min-height: 58px;
+        padding-top: 9px;
+        border-top: 1px solid var(--line);
+      }
+
+      .track-label strong {
+        display: block;
+        font-size: 13px;
+      }
+
+      .track-label small {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .track {
+        position: relative;
+        min-height: 58px;
+        border-top: 1px solid var(--line);
+        background:
+          repeating-linear-gradient(90deg, transparent 0, transparent calc(12.5% - 1px), rgba(29, 38, 36, 0.07) calc(12.5% - 1px), rgba(29, 38, 36, 0.07) 12.5%),
+          linear-gradient(180deg, transparent, rgba(246, 248, 244, 0.72));
+      }
+
+      .band {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 32px;
+        background: rgba(115, 87, 214, 0.09);
+        border-inline: 1px solid rgba(115, 87, 214, 0.16);
+      }
+
+      .block {
+        position: absolute;
+        top: 15px;
+        height: 28px;
+        display: flex;
+        align-items: center;
+        padding: 0 8px;
+        border: 1px solid currentColor;
+        border-radius: 7px;
+        background: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        box-shadow: 0 8px 18px rgba(23, 33, 35, 0.08);
+        white-space: nowrap;
+      }
+
+      .teal {
+        color: var(--teal);
+      }
+
+      .blue {
+        color: var(--blue);
+      }
+
+      .amber {
+        color: var(--amber);
+      }
+
+      .purple {
+        color: var(--purple);
+      }
+
+      .project-table {
+        display: grid;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .row {
+        min-height: 44px;
+        display: grid;
+        grid-template-columns: minmax(220px, 1.4fr) 90px 120px 120px 120px 120px;
+        gap: 12px;
+        padding: 0 14px;
+        border-top: 1px solid var(--line);
+        font-size: 13px;
+      }
+
+      .row:first-child {
+        border-top: 0;
+      }
+
+      .table-head {
+        min-height: 38px;
+        background: #f8faf6;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .project-name {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .folder {
+        width: 22px;
+        height: 17px;
+        border-radius: 4px;
+        background: currentColor;
+        opacity: 0.88;
+      }
+
+      .chip {
+        justify-content: center;
+        width: max-content;
+        min-height: 24px;
+        padding: 0 8px;
+        border-radius: 999px;
+        background: #edf2ef;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .chip.green {
+        background: #e4f4ea;
+        color: var(--green);
+      }
+
+      .chip.blue {
+        background: #e9f1ff;
+        color: var(--blue);
+      }
+
+      .chip.red {
+        background: #ffe9ee;
+        color: var(--red);
+      }
+
+      .inbox-content {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 388px;
+        gap: 18px;
+        height: calc(900px - 72px);
+        padding: 26px 28px 30px;
+      }
+
+      .inbox-main {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .filter-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .filter-row .chip {
+        min-height: 34px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        color: var(--muted);
+      }
+
+      .filter-row .chip.active {
+        border-color: rgba(2, 125, 124, 0.32);
+        background: #e7f3f1;
+        color: #026d6c;
+      }
+
+      .session-table {
+        min-height: 0;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .session-row {
+        min-height: 58px;
+        display: grid;
+        grid-template-columns: 34px minmax(190px, 1.25fr) 92px 112px 70px 70px 92px 114px;
+        gap: 10px;
+        align-items: center;
+        padding: 0 12px;
+        border-top: 1px solid var(--line);
+        font-size: 12px;
+      }
+
+      .session-row:first-child {
+        border-top: 0;
+      }
+
+      .session-row.selected {
+        background: #eef5ff;
+        box-shadow: inset 3px 0 0 var(--blue);
+      }
+
+      .session-title strong {
+        display: block;
+        margin-bottom: 3px;
+        font-size: 13px;
+      }
+
+      .session-title small {
+        color: var(--muted);
+      }
+
+      .inspector {
+        min-width: 0;
+        border-left: 1px solid var(--line);
+        padding-left: 18px;
+      }
+
+      .inspector-card {
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto auto auto 1fr auto;
+        gap: 14px;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: var(--shadow);
+      }
+
+      .inspector-title {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .action-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+
+      .action-grid .tool-button {
+        height: 42px;
+        font-size: 12px;
+      }
+
+      .event-list,
+      .file-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .event {
+        display: grid;
+        grid-template-columns: 44px 1fr auto;
+        gap: 8px;
+        align-items: start;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--line);
+        font-size: 12px;
+      }
+
+      .file {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        font-size: 12px;
+      }
+
+      .note {
+        min-height: 72px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="board">
+      <section class="frame">
+        <aside class="sidebar">
+          <div class="brand">
+            <div class="mark">S</div>
+            <div>
+              <strong>Sessionary</strong>
+              <small>Local AI session ledger</small>
+            </div>
+          </div>
+          <div class="date-pill"><span>May 20, 2026</span><span>‹ ›</span></div>
+          <nav class="nav">
+            <div class="nav-item active"><span class="icon">☼</span><span>Today</span></div>
+            <div class="nav-item"><span class="icon">▣</span><span>Inbox</span><small>9</small></div>
+            <div class="nav-item"><span class="icon">▤</span><span>Timeline</span></div>
+            <div class="nav-item"><span class="icon">☷</span><span>Report</span></div>
+            <div class="nav-item"><span class="icon">⚙</span><span>Settings</span></div>
+          </nav>
+          <div class="status-strip">
+            <span><span class="dot"></span> Local only</span>
+            <span>2 sources</span>
+          </div>
+        </aside>
+
+        <section class="workspace">
+          <header class="workspace-header">
+            <div class="source-summary">
+              <span class="source-pill"><span class="dot"></span> Codex connected</span>
+              <span class="source-pill"><span class="dot"></span> Claude connected</span>
+              <span>Last scan 2m ago</span>
+            </div>
+            <div class="tool-row">
+              <button class="tool-button">Sources</button>
+              <button class="tool-button primary">Rescan</button>
+            </div>
+          </header>
+
+          <div class="content">
+            <div class="page-title">
+              <div>
+                <h1>Today</h1>
+                <p class="subhead">Open loops first, timeline second, details only on demand.</p>
+              </div>
+              <span class="chip blue">6 sessions need attention</span>
+            </div>
+
+            <div class="metrics">
+              <div class="metric"><div><span class="label">Open review queue</span><strong>6</strong></div><span class="spark"></span></div>
+              <div class="metric"><div><span class="label">Needs repair</span><strong style="color: var(--red)">2</strong></div><span class="spark"></span></div>
+              <div class="metric"><div><span class="label">Parallel time</span><strong style="color: var(--teal)">2h 44m</strong></div><span class="spark"></span></div>
+              <div class="metric"><div><span class="label">Human time est.</span><strong style="color: var(--amber)">1h 43m</strong></div><span class="spark"></span></div>
+            </div>
+
+            <div class="today-grid">
+              <section class="panel">
+                <div class="panel-header"><h2>Review Queue</h2><span class="muted">next actions</span></div>
+                <div class="queue-list">
+                  <div class="queue-card selected"><span class="status-dot blue"></span><div><strong>sessionary / layout redesign</strong><p>Needs review · 42m · 16 tool calls</p></div></div>
+                  <div class="queue-card"><span class="status-dot red"></span><div><strong>tag_curator / UI slice</strong><p>Needs repair · duplicate state after filter change</p></div></div>
+                  <div class="queue-card"><span class="status-dot"></span><div><strong>PeopleLens / relevance tuning</strong><p>Needs review · search ranking changed</p></div></div>
+                  <div class="queue-card"><span class="status-dot"></span><div><strong>marker / sync logic</strong><p>Unknown · parser picked up a new branch</p></div></div>
+                </div>
+              </section>
+
+              <section class="panel timeline-panel">
+                <div class="panel-header"><h2>Day Timeline</h2><div class="tool-row"><span class="chip">15m</span><span class="chip">30m</span><span class="chip active">60m</span></div></div>
+                <div class="timeline">
+                  <div></div>
+                  <div class="ruler"><span>09:00</span><span>10:00</span><span>11:00</span><span>12:00</span><span>13:00</span><span>14:00</span><span>15:00</span><span>16:00</span></div>
+                  <div class="track-label"><strong>sessionary</strong><small>5 sessions</small></div>
+                  <div class="track"><span class="band" style="left: 39%"></span><span class="band" style="left: 63%"></span><span class="block teal" style="left: 8%; width: 98px">Codex 42m</span><span class="block amber" style="left: 34%; width: 128px">Codex 1h15m</span><span class="block teal" style="left: 68%; width: 100px">Claude 35m</span></div>
+                  <div class="track-label"><strong>PeopleLens</strong><small>4 sessions</small></div>
+                  <div class="track"><span class="band" style="left: 39%"></span><span class="band" style="left: 63%"></span><span class="block blue" style="left: 15%; width: 112px">Claude 45m</span><span class="block teal" style="left: 43%; width: 138px">Codex 1h10m</span><span class="block blue" style="left: 74%; width: 96px">Claude 50m</span></div>
+                  <div class="track-label"><strong>tag_curator</strong><small>3 sessions</small></div>
+                  <div class="track"><span class="band" style="left: 39%"></span><span class="band" style="left: 63%"></span><span class="block purple" style="left: 12%; width: 98px">Codex 30m</span><span class="block purple" style="left: 35%; width: 112px">Claude 40m</span><span class="block purple" style="left: 66%; width: 116px">Codex 40m</span></div>
+                  <div class="track-label"><strong>obsidian-clipper</strong><small>3 sessions</small></div>
+                  <div class="track"><span class="band" style="left: 39%"></span><span class="band" style="left: 63%"></span><span class="block teal" style="left: 20%; width: 96px">Claude 30m</span><span class="block teal" style="left: 51%; width: 102px">Codex 40m</span></div>
+                </div>
+              </section>
+            </div>
+
+            <section class="project-table">
+              <div class="row table-head"><span>Project</span><span>Sessions</span><span>AI waiting</span><span>Human review</span><span>Parallel</span><span>Status</span></div>
+              <div class="row"><span class="project-name teal"><span class="folder"></span><strong>sessionary</strong></span><span>6</span><span>1h 42m</span><span>32m</span><span>1h 04m</span><span class="chip blue">Needs review</span></div>
+              <div class="row"><span class="project-name amber"><span class="folder"></span><strong>PeopleLens</strong></span><span>4</span><span>1h 08m</span><span>22m</span><span>42m</span><span class="chip green">Useful</span></div>
+              <div class="row"><span class="project-name purple"><span class="folder"></span><strong>tag_curator</strong></span><span>3</span><span>52m</span><span>15m</span><span>31m</span><span class="chip red">Needs repair</span></div>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      <section class="frame">
+        <aside class="sidebar">
+          <div class="brand">
+            <div class="mark">S</div>
+            <div>
+              <strong>Sessionary</strong>
+              <small>Local AI session ledger</small>
+            </div>
+          </div>
+          <div class="date-pill"><span>May 20, 2026</span><span>‹ ›</span></div>
+          <nav class="nav">
+            <div class="nav-item"><span class="icon">☼</span><span>Today</span></div>
+            <div class="nav-item active"><span class="icon">▣</span><span>Inbox</span><small>18</small></div>
+            <div class="nav-item"><span class="icon">▤</span><span>Timeline</span></div>
+            <div class="nav-item"><span class="icon">☷</span><span>Report</span></div>
+            <div class="nav-item"><span class="icon">⚙</span><span>Settings</span></div>
+          </nav>
+          <div class="status-strip">
+            <span><span class="dot"></span> Local only</span>
+            <span>2 sources</span>
+          </div>
+        </aside>
+
+        <section class="workspace">
+          <header class="workspace-header">
+            <div class="source-summary">
+              <span class="source-pill"><span class="dot"></span> Codex connected</span>
+              <span class="source-pill"><span class="dot"></span> Claude connected</span>
+              <span>Last scan 2m ago</span>
+            </div>
+            <div class="tool-row">
+              <button class="tool-button">Search</button>
+              <button class="tool-button primary">Rescan</button>
+            </div>
+          </header>
+
+          <div class="inbox-content">
+            <main class="inbox-main">
+              <div class="page-title">
+                <div>
+                  <h1>Session Inbox</h1>
+                  <p class="subhead">Master-detail is useful here because cleanup is the task.</p>
+                </div>
+                <span class="chip blue">Showing 1-9 of 18</span>
+              </div>
+              <div class="filter-row">
+                <span class="chip active">All 18</span>
+                <span class="chip">Unknown 6</span>
+                <span class="chip">Useful 5</span>
+                <span class="chip">Needs review 4</span>
+                <span class="chip">Needs repair 2</span>
+                <span class="chip">Discarded 1</span>
+              </div>
+              <section class="session-table">
+                <div class="session-row table-head"><span></span><span>Project</span><span>Source</span><span>Time</span><span>Rounds</span><span>Tools</span><span>Files</span><span>Status</span></div>
+                <div class="session-row"><span class="dot"></span><span class="session-title"><strong>marker</strong><small>storage adapter cleanup</small></span><span class="chip green">Codex</span><span>09:10-09:52</span><span>6</span><span>14</span><span>11</span><span class="chip green">Useful</span></div>
+                <div class="session-row"><span class="dot" style="background: var(--amber)"></span><span class="session-title"><strong>PeopleLens</strong><small>ingest pipeline</small></span><span class="chip">Claude</span><span>09:25-10:10</span><span>8</span><span>19</span><span>23</span><span class="chip blue">Needs review</span></div>
+                <div class="session-row"><span class="dot"></span><span class="session-title"><strong>tag_curator</strong><small>rules engine</small></span><span class="chip green">Codex</span><span>10:20-11:05</span><span>7</span><span>15</span><span>17</span><span class="chip green">Useful</span></div>
+                <div class="session-row"><span class="dot" style="background: var(--red)"></span><span class="session-title"><strong>obsidian-clipper</strong><small>clip parser</small></span><span class="chip">Claude</span><span>11:15-11:55</span><span>5</span><span>9</span><span>6</span><span class="chip red">Needs repair</span></div>
+                <div class="session-row selected"><span class="dot" style="background: var(--blue)"></span><span class="session-title"><strong>sessionary</strong><small>layout redesign</small></span><span class="chip green">Codex</span><span>13:00-13:42</span><span>7</span><span>16</span><span>8</span><span class="chip blue">Needs review</span></div>
+                <div class="session-row"><span class="dot"></span><span class="session-title"><strong>PeopleLens</strong><small>entity merge</small></span><span class="chip">Claude</span><span>13:10-13:50</span><span>6</span><span>12</span><span>14</span><span class="chip green">Useful</span></div>
+                <div class="session-row"><span class="dot" style="background: var(--amber)"></span><span class="session-title"><strong>tag_curator</strong><small>suggestions</small></span><span class="chip green">Codex</span><span>14:05-14:45</span><span>7</span><span>13</span><span>10</span><span class="chip blue">Needs review</span></div>
+              </section>
+            </main>
+
+            <aside class="inspector">
+              <section class="inspector-card">
+                <div class="inspector-title">
+                  <div>
+                    <h2>sessionary / layout redesign</h2>
+                    <p class="subhead">May 20, 13:00 - 13:42 · 42m</p>
+                  </div>
+                  <span class="chip blue">Needs review</span>
+                </div>
+                <div class="action-grid">
+                  <button class="tool-button">Useful</button>
+                  <button class="tool-button primary">Review done</button>
+                  <button class="tool-button">Needs repair</button>
+                  <button class="tool-button">Discard</button>
+                </div>
+                <section class="panel" style="box-shadow: none">
+                  <div class="panel-header"><h2>Event Timeline</h2><span class="muted">estimated</span></div>
+                  <div class="event-list" style="padding: 12px">
+                    <div class="event"><span>13:00</span><strong class="blue">Prompt</strong><span>8m</span></div>
+                    <div class="event"><span>13:08</span><strong class="teal">Tool calls</strong><span>18m</span></div>
+                    <div class="event"><span>13:26</span><strong class="blue">File edits</strong><span>10m</span></div>
+                    <div class="event"><span>13:36</span><strong class="amber">Verification</strong><span>6m</span></div>
+                  </div>
+                </section>
+                <section>
+                  <div class="panel-header" style="padding: 0; border: 0"><h2>Related Files</h2><span class="muted">8 files</span></div>
+                  <div class="file-list" style="margin-top: 10px">
+                    <div class="file"><span>src/layout/AppShell.tsx</span><strong class="green">+120</strong></div>
+                    <div class="file"><span>src/views/TodayView.tsx</span><strong class="green">+86</strong></div>
+                    <div class="file"><span>src/styles.css</span><strong class="red">-210</strong></div>
+                  </div>
+                </section>
+                <div class="note">Add review notes for this session...</div>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>
