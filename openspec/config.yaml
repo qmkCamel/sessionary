@@ -1,0 +1,23 @@
+schema: spec-driven
+
+context: |
+  Project: Sessionary, a local-first desktop app for reviewing AI coding sessions.
+  Language: Write OpenSpec artifacts in Chinese by default; keep necessary technical terms in English.
+  Stack: Tauri 2 + React + TypeScript + Vite + Rust + SQLite.
+  Product surfaces: Today dashboard, Session Inbox, Project Timeline, Daily Report, Settings.
+  Privacy: local-first; do not upload prompts, responses, source files, or local session metadata.
+
+rules:
+  proposal:
+    - Include Background, Goals, Non-goals, User Value, and Success Criteria.
+    - Keep each change narrow enough for one implementation phase.
+  design:
+    - Include data model impact, UI behavior, fallback behavior, and validation.
+    - State local-first/privacy constraints explicitly when touching user data.
+  tasks:
+    - Use checkbox lists grouped by subsystem.
+    - Include OpenSpec, automated tests, build checks, and rendered UI validation.
+  specs:
+    - Use ADDED/MODIFIED Requirements and Scenario blocks.
+    - Capture fallback and failure behavior, not only happy paths.
+

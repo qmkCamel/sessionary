@@ -21,7 +21,7 @@ import {
   Wrench,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   exportReport,
   finishReview,
@@ -34,6 +34,7 @@ import {
   scanSources,
   startReview
 } from "./api";
+import { createTranslator, resolveLocale, type LanguageSetting, type Translator, type TranslationKey } from "./i18n";
 import type { AppSettings, DayLedger, OverlapInterval, SessionPatch, SessionRecord, SessionStatus } from "./shared/types";
 
 type View = "today" | "inbox" | "timeline" | "report" | "settings";
@@ -41,14 +42,14 @@ type Filter = "all" | SessionStatus;
 type ZoomMinutes = 15 | 30 | 60;
 type RangeSelection = { startedAt: string; endedAt: string };
 
-const statusLabels: Record<SessionStatus, string> = {
-  unknown: "Unknown",
-  useful: "Useful",
-  needs_review: "Needs review",
-  needs_repair: "Needs repair",
-  repaired: "Repaired",
-  failed: "Failed",
-  discarded: "Discarded"
+const statusKeys: Record<SessionStatus, TranslationKey> = {
+  unknown: "status.unknown",
+  useful: "status.useful",
+  needs_review: "status.needs_review",
+  needs_repair: "status.needs_repair",
+  repaired: "status.repaired",
+  failed: "status.failed",
+  discarded: "status.discarded"
 };
 
 const sourceLabels = {
@@ -56,13 +57,19 @@ const sourceLabels = {
   claude: "Claude"
 };
 
-const navItems: Array<{ id: View; label: string; icon: typeof LayoutDashboard }> = [
-  { id: "today", label: "Today", icon: LayoutDashboard },
-  { id: "inbox", label: "Session Inbox", icon: Inbox },
-  { id: "timeline", label: "Project Timeline", icon: Activity },
-  { id: "report", label: "Daily Report", icon: FileText },
-  { id: "settings", label: "Settings", icon: Settings }
+const navItems: Array<{ id: View; labelKey: TranslationKey; icon: typeof LayoutDashboard }> = [
+  { id: "today", labelKey: "nav.today", icon: LayoutDashboard },
+  { id: "inbox", labelKey: "nav.inbox", icon: Inbox },
+  { id: "timeline", labelKey: "nav.timeline", icon: Activity },
+  { id: "report", labelKey: "nav.report", icon: FileText },
+  { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];
+
+const TranslationContext = createContext<Translator>(createTranslator("en"));
+
+function useTranslation() {
+  return useContext(TranslationContext);
+}
 
 function secondsLabel(seconds: number): string {
   if (seconds < 60) return `${seconds}s`;
@@ -71,8 +78,8 @@ function secondsLabel(seconds: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function timeLabel(iso: string | null): string {
-  if (!iso) return "open";
+function timeLabel(iso: string | null, t?: Translator): string {
+  if (!iso) return t ? t("common.open") : "open";
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
@@ -145,6 +152,7 @@ function Metric({ label, value, hint }: { label: string; value: string | number;
 }
 
 function SessionPill({ session, selected, onSelect }: { session: SessionRecord; selected: boolean; onSelect: () => void }) {
+  const t = useTranslation();
   return (
     <button className={`session-row ${selected ? "selected" : ""}`} onClick={onSelect}>
       <span className={`source-dot ${session.source}`} />
@@ -154,7 +162,7 @@ function SessionPill({ session, selected, onSelect }: { session: SessionRecord; 
           {sourceLabels[session.source]} · {session.projectName} · {secondsLabel(session.durationSeconds)}
         </small>
       </span>
-      <span className={`status-chip ${session.status}`}>{statusLabels[session.status]}</span>
+      <span className={`status-chip ${session.status}`}>{t(statusKeys[session.status])}</span>
     </button>
   );
 }
@@ -178,6 +186,7 @@ function TimelineCanvas({
   onOverlapSelect?: (overlap: OverlapInterval) => void;
   onRangeSelect?: (range: RangeSelection) => void;
 }) {
+  const t = useTranslation();
   const bounds = useMemo(() => dayBounds(ledger, zoomMinutes), [ledger, zoomMinutes]);
   const [dragStart, setDragStart] = useState<number | null>(null);
   const [dragEnd, setDragEnd] = useState<number | null>(null);
@@ -191,7 +200,7 @@ function TimelineCanvas({
     return [...grouped.entries()];
   }, [ledger.sessions]);
 
-  if (ledger.sessions.length === 0) return <EmptyState title="No sessions for this day" />;
+  if (ledger.sessions.length === 0) return <EmptyState title={t("timeline.noSessions")} />;
 
   const timeFromClientX = (clientX: number, element: HTMLElement) => {
     const rect = element.getBoundingClientRect();
@@ -244,9 +253,9 @@ function TimelineCanvas({
   return (
     <div className="timeline-canvas">
       <div className="timeline-ruler">
-        <span>{timeLabel(new Date(bounds[0]).toISOString())}</span>
-        <span>{timeLabel(new Date((bounds[0] + bounds[1]) / 2).toISOString())}</span>
-        <span>{timeLabel(new Date(bounds[1]).toISOString())}</span>
+        <span>{timeLabel(new Date(bounds[0]).toISOString(), t)}</span>
+        <span>{timeLabel(new Date((bounds[0] + bounds[1]) / 2).toISOString(), t)}</span>
+        <span>{timeLabel(new Date(bounds[1]).toISOString(), t)}</span>
       </div>
       <div className="timeline-body">
         {ledger.overlaps.map((overlap) => (
@@ -290,7 +299,7 @@ function TimelineCanvas({
                   key={session.id}
                   className={`timeline-block ${session.source} ${session.status} ${selectedId === session.id ? "selected" : ""}`}
                   style={positionFor(session.startedAt, session.endedAt, bounds)}
-                  title={`${sourceLabels[session.source]} · ${timeLabel(session.startedAt)}-${timeLabel(session.endedAt)} · ${session.toolCallCount} tools`}
+                  title={`${sourceLabels[session.source]} · ${timeLabel(session.startedAt, t)}-${timeLabel(session.endedAt, t)} · ${session.toolCallCount} ${t("common.tools")}`}
                   onMouseDown={(event) => event.stopPropagation()}
                   onClick={() => onSelect(session)}
                 >
@@ -329,30 +338,31 @@ function TodayView({
   onRangeSelect: (range: RangeSelection) => void;
   onNavigate: (view: View, filter?: Filter) => void;
 }) {
+  const t = useTranslation();
   return (
     <main className="workspace">
       <div className="page-title">
         <div>
           <p>{ledger.metrics.date}</p>
-          <h1>Today</h1>
+          <h1>{t("nav.today")}</h1>
         </div>
-        <span className="freshness">Updated {timeLabel(ledger.metrics.generatedAt)}</span>
+        <span className="freshness">{t("common.updated")} {timeLabel(ledger.metrics.generatedAt, t)}</span>
       </div>
 
       <div className="metrics-grid">
-        <Metric label="Projects" value={ledger.metrics.projectCount} />
-        <Metric label="Sessions" value={ledger.metrics.sessionCount} />
-        <Metric label="AI waiting" value={secondsLabel(ledger.metrics.aiWaitingSecondsEstimated)} hint="estimated" />
-        <Metric label="Prompting" value={secondsLabel(ledger.metrics.promptingSecondsEstimated)} hint="estimated" />
-        <Metric label="Review" value={secondsLabel(ledger.metrics.reviewSecondsEstimated)} hint="estimated" />
-        <Metric label="Repair" value={secondsLabel(ledger.metrics.repairSecondsEstimated)} hint="estimated" />
-        <Metric label="Parallel" value={secondsLabel(ledger.metrics.parallelSeconds)} />
-        <Metric label="Max agents" value={ledger.metrics.maxConcurrentSessions} />
+        <Metric label={t("metric.projects")} value={ledger.metrics.projectCount} />
+        <Metric label={t("metric.sessions")} value={ledger.metrics.sessionCount} />
+        <Metric label={t("metric.aiWaiting")} value={secondsLabel(ledger.metrics.aiWaitingSecondsEstimated)} hint={t("metric.estimated")} />
+        <Metric label={t("metric.prompting")} value={secondsLabel(ledger.metrics.promptingSecondsEstimated)} hint={t("metric.estimated")} />
+        <Metric label={t("metric.review")} value={secondsLabel(ledger.metrics.reviewSecondsEstimated)} hint={t("metric.estimated")} />
+        <Metric label={t("metric.repair")} value={secondsLabel(ledger.metrics.repairSecondsEstimated)} hint={t("metric.estimated")} />
+        <Metric label={t("metric.parallel")} value={secondsLabel(ledger.metrics.parallelSeconds)} />
+        <Metric label={t("metric.maxAgents")} value={ledger.metrics.maxConcurrentSessions} />
       </div>
 
       <section className="panel">
         <div className="panel-header">
-          <h2>Session Timeline</h2>
+          <h2>{t("timeline.sessionTimeline")}</h2>
           <div className="segmented-control">
             {([15, 30, 60] as ZoomMinutes[]).map((zoom) => (
               <button key={zoom} className={zoomMinutes === zoom ? "active" : ""} onClick={() => onZoom(zoom)}>
@@ -376,8 +386,8 @@ function TodayView({
       <div className="split-grid">
         <section className="panel">
           <div className="panel-header">
-            <h2>Projects</h2>
-            <span>{ledger.projects.filter((project) => project.isParallel).length} parallel</span>
+            <h2>{t("metric.projects")}</h2>
+            <span>{ledger.projects.filter((project) => project.isParallel).length} {t("common.parallel")}</span>
           </div>
           <div className="project-list">
             {ledger.projects.map((project) => (
@@ -392,10 +402,10 @@ function TodayView({
                 </span>
                 <span className="project-meta">
                   <GitBranch size={14} />
-                  {project.gitBranch ?? "no branch"}
+                  {project.gitBranch ?? t("common.noBranch")}
                 </span>
                 <span className={project.isParallel ? "parallel-tag" : "quiet-tag"}>
-                  {project.isParallel ? "parallel" : "solo"}
+                  {project.isParallel ? t("common.parallel") : t("common.solo")}
                 </span>
               </button>
             ))}
@@ -404,13 +414,13 @@ function TodayView({
 
         <section className="panel">
           <div className="panel-header">
-            <h2>Inbox</h2>
-            <span>{ledger.metrics.unknownCount + ledger.metrics.needsReviewCount + ledger.metrics.needsRepairCount} open</span>
+            <h2>{t("nav.inbox")}</h2>
+            <span>{ledger.metrics.unknownCount + ledger.metrics.needsReviewCount + ledger.metrics.needsRepairCount} {t("inbox.open")}</span>
           </div>
           <div className="queue-actions">
-            <button onClick={() => onNavigate("inbox", "unknown")}>Unknown {ledger.metrics.unknownCount}</button>
-            <button onClick={() => onNavigate("inbox", "needs_review")}>Review {ledger.metrics.needsReviewCount}</button>
-            <button onClick={() => onNavigate("inbox", "needs_repair")}>Repair {ledger.metrics.needsRepairCount}</button>
+            <button onClick={() => onNavigate("inbox", "unknown")}>{t("status.unknown")} {ledger.metrics.unknownCount}</button>
+            <button onClick={() => onNavigate("inbox", "needs_review")}>{t("inbox.review")} {ledger.metrics.needsReviewCount}</button>
+            <button onClick={() => onNavigate("inbox", "needs_repair")}>{t("inbox.repair")} {ledger.metrics.needsRepairCount}</button>
           </div>
           <div className="compact-list">
             {ledger.sessions.slice(0, 5).map((session) => (
@@ -442,6 +452,7 @@ function InboxView({
   onSelect: (session: SessionRecord) => void;
   onStatus: (session: SessionRecord, status: SessionStatus) => Promise<void>;
 }) {
+  const t = useTranslation();
   const [recentlyUpdatedId, setRecentlyUpdatedId] = useState<string>();
   const filtered = ledger.sessions.filter((session) => {
     const matchesFilter = filter === "all" || session.status === filter || session.id === recentlyUpdatedId;
@@ -465,25 +476,25 @@ function InboxView({
       <div className="page-title">
         <div>
           <p>{ledger.metrics.date}</p>
-          <h1>Session Inbox</h1>
+          <h1>{t("nav.inbox")}</h1>
         </div>
         <div className="search-box">
           <Search size={16} />
-          <input value={search} onChange={(event) => onSearch(event.target.value)} placeholder="Search sessions" />
+          <input value={search} onChange={(event) => onSearch(event.target.value)} placeholder={t("inbox.search")} />
         </div>
       </div>
 
       <div className="filter-bar">
         {(["all", "unknown", "useful", "needs_review", "needs_repair", "discarded"] as Filter[]).map((item) => (
           <button key={item} className={filter === item ? "active" : ""} onClick={() => onFilter(item)}>
-            {item === "all" ? "All" : statusLabels[item]}
+            {item === "all" ? t("common.all") : t(statusKeys[item])}
           </button>
         ))}
       </div>
 
       <section className="panel inbox-panel">
         {filtered.length === 0 ? (
-          <EmptyState title="Inbox is clear for this filter" />
+          <EmptyState title={t("inbox.clear")} />
         ) : (
           filtered.map((session) => (
             <article className={`inbox-card ${selected?.id === session.id ? "selected" : ""}`} key={session.id} onClick={() => onSelect(session)}>
@@ -492,33 +503,33 @@ function InboxView({
                 <div>
                   <h2>{session.summary || session.sourceSessionId}</h2>
                   <p>
-                    {sourceLabels[session.source]} · {session.projectName} · {timeLabel(session.startedAt)}-{timeLabel(session.endedAt)}
+                    {sourceLabels[session.source]} · {session.projectName} · {timeLabel(session.startedAt, t)}-{timeLabel(session.endedAt, t)}
                   </p>
                 </div>
               </div>
               <div className="session-stats">
-                <span>{session.userMessageCount} prompts</span>
-                <span>{session.assistantMessageCount} replies</span>
-                <span>{session.toolCallCount} tools</span>
+                <span>{session.userMessageCount} {t("inbox.prompts")}</span>
+                <span>{session.assistantMessageCount} {t("inbox.replies")}</span>
+                <span>{session.toolCallCount} {t("common.tools")}</span>
                 <span>{secondsLabel(session.durationSeconds)}</span>
               </div>
               <div className="quick-actions" onClick={(event) => event.stopPropagation()}>
-                <button title="Useful" onClick={() => void markStatus(session, "useful")}>
+                <button title={t("status.useful")} onClick={() => void markStatus(session, "useful")}>
                   <Check size={16} />
                 </button>
-                <button title="Needs review" onClick={() => void markStatus(session, "needs_review")}>
+                <button title={t("status.needs_review")} onClick={() => void markStatus(session, "needs_review")}>
                   <AlertCircle size={16} />
                 </button>
-                <button title="Needs repair" onClick={() => void markStatus(session, "needs_repair")}>
+                <button title={t("status.needs_repair")} onClick={() => void markStatus(session, "needs_repair")}>
                   <Wrench size={16} />
                 </button>
-                <button title="Discarded" onClick={() => void markStatus(session, "discarded")}>
+                <button title={t("status.discarded")} onClick={() => void markStatus(session, "discarded")}>
                   <X size={16} />
                 </button>
               </div>
               <span className={`status-chip ${session.status}`}>
                 {statusIcon(session.status)}
-                {statusLabels[session.status]}
+                {t(statusKeys[session.status])}
               </span>
             </article>
           ))
@@ -549,6 +560,7 @@ function ProjectTimelineView({
   onOverlapSelect: (overlap: OverlapInterval) => void;
   onRangeSelect: (range: RangeSelection) => void;
 }) {
+  const t = useTranslation();
   const rangeSessions = sessionsInRange(ledger, selectedRange);
   const rangeProjects = [...new Set(rangeSessions.map((session) => session.projectName))];
 
@@ -557,10 +569,10 @@ function ProjectTimelineView({
       <div className="page-title">
         <div>
           <p>{ledger.metrics.date}</p>
-          <h1>Project Timeline</h1>
+          <h1>{t("nav.timeline")}</h1>
         </div>
         <span className="freshness">
-          {ledger.metrics.maxConcurrentProjects} projects · {secondsLabel(ledger.metrics.parallelSeconds)}
+          {ledger.metrics.maxConcurrentProjects} {t("metric.projects")} · {secondsLabel(ledger.metrics.parallelSeconds)}
         </span>
       </div>
 
@@ -575,7 +587,7 @@ function ProjectTimelineView({
           </div>
           {selectedRange && (
             <span>
-              {timeLabel(selectedRange.startedAt)}-{timeLabel(selectedRange.endedAt)} · {rangeSessions.length} sessions · {rangeProjects.length} projects
+              {timeLabel(selectedRange.startedAt, t)}-{timeLabel(selectedRange.endedAt, t)} · {rangeSessions.length} {t("common.sessions")} · {rangeProjects.length} {t("metric.projects")}
             </span>
           )}
         </div>
@@ -593,12 +605,12 @@ function ProjectTimelineView({
 
       <section className="panel">
         <div className="panel-header">
-          <h2>Overlap Summary</h2>
-          <span>{ledger.overlaps.length} intervals</span>
+          <h2>{t("projectTimeline.overlapSummary")}</h2>
+          <span>{ledger.overlaps.length} {t("projectTimeline.intervals")}</span>
         </div>
         <div className="overlap-list">
           {ledger.overlaps.length === 0 ? (
-            <EmptyState title="No parallel project intervals" />
+            <EmptyState title={t("projectTimeline.noParallel")} />
           ) : (
             ledger.overlaps.map((overlap) => (
               <button
@@ -609,7 +621,7 @@ function ProjectTimelineView({
                 <span>
                   <strong>{overlap.projectNames.join(" + ")}</strong>
                   <small>
-                    {timeLabel(overlap.startedAt)}-{timeLabel(overlap.endedAt)}
+                    {timeLabel(overlap.startedAt, t)}-{timeLabel(overlap.endedAt, t)}
                   </small>
                 </span>
                 <em>{secondsLabel(overlap.seconds)}</em>
@@ -639,27 +651,28 @@ function ReportView({
   onCopy: () => void;
   onExport: () => void;
 }) {
+  const t = useTranslation();
   return (
     <main className="workspace report-view">
       <div className="page-title">
         <div>
           <p>{ledger.metrics.date}</p>
-          <h1>Daily Report</h1>
+          <h1>{t("nav.report")}</h1>
         </div>
         <div className="toolbar">
-          <button title="Generate report" onClick={onGenerate}>
+          <button title={t("report.generate")} onClick={onGenerate}>
             <RefreshCw size={16} />
           </button>
-          <button title="Copy Markdown" onClick={onCopy}>
+          <button title={t("report.copy")} onClick={onCopy}>
             <Clipboard size={16} />
           </button>
-          <button title="Export Markdown" onClick={onExport}>
+          <button title={t("report.export")} onClick={onExport}>
             <Download size={16} />
           </button>
         </div>
       </div>
       <textarea className="report-editor" value={markdown} onChange={(event) => onChange(event.target.value)} />
-      {exportedPath && <p className="export-path">Exported to {exportedPath}</p>}
+      {exportedPath && <p className="export-path">{t("report.exportedTo")} {exportedPath}</p>}
     </main>
   );
 }
@@ -677,6 +690,7 @@ function SettingsEditor({
   onScan?: () => void;
   compact?: boolean;
 }) {
+  const t = useTranslation();
   const updatePaths = (source: "codex" | "claude", value: string) => {
     onChange({
       ...settings,
@@ -695,15 +709,39 @@ function SettingsEditor({
     });
   };
 
+  const updateLanguage = (language: LanguageSetting) => {
+    onChange({
+      ...settings,
+      language
+    });
+  };
+
   return (
     <div className={compact ? "settings-editor compact" : "settings-editor"}>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("settings.language")}</h2>
+          <span>{t("settings.languageHint")}</span>
+        </div>
+        <div className="segmented-control language-control">
+          {([
+            ["system", "language.system"],
+            ["en", "language.english"],
+            ["zh-CN", "language.simplifiedChinese"]
+          ] as Array<[LanguageSetting, TranslationKey]>).map(([value, labelKey]) => (
+            <button key={value} className={(settings.language ?? "system") === value ? "active" : ""} onClick={() => updateLanguage(value)}>
+              {t(labelKey)}
+            </button>
+          ))}
+        </div>
+      </section>
       {settings.sourceConfigs.map((config) => (
         <section className="panel" key={config.source}>
           <div className="panel-header">
             <h2>{sourceLabels[config.source]}</h2>
             <label className="switch">
               <input type="checkbox" checked={config.enabled} onChange={() => toggleSource(config.source)} />
-              <span>{config.enabled ? "Enabled" : "Off"}</span>
+              <span>{config.enabled ? t("common.enabled") : t("common.off")}</span>
             </label>
           </div>
           <textarea
@@ -715,8 +753,8 @@ function SettingsEditor({
       ))}
       <section className="panel">
         <div className="panel-header">
-          <h2>Project Roots</h2>
-          <span>optional</span>
+          <h2>{t("settings.projectRoots")}</h2>
+          <span>{t("common.optional")}</span>
         </div>
         <textarea
           value={settings.projectRoots.join("\n")}
@@ -730,8 +768,8 @@ function SettingsEditor({
         />
       </section>
       <div className="settings-actions">
-        <button className="primary-button" onClick={onSave}>Save</button>
-        {onScan && <button onClick={onScan}>Save and Scan</button>}
+        <button className="primary-button" onClick={onSave}>{t("common.save")}</button>
+        {onScan && <button onClick={onScan}>{t("common.saveAndScan")}</button>}
       </div>
     </div>
   );
@@ -748,12 +786,13 @@ function SettingsView({
   onSave: () => void;
   onScan: () => void;
 }) {
+  const t = useTranslation();
   return (
     <main className="workspace">
       <div className="page-title">
         <div>
-          <p>Local only</p>
-          <h1>Settings</h1>
+          <p>{t("common.localOnly")}</p>
+          <h1>{t("nav.settings")}</h1>
         </div>
       </div>
       <SettingsEditor settings={settings} onChange={onChange} onSave={onSave} onScan={onScan} />
@@ -770,12 +809,13 @@ function Onboarding({
   onChange: (settings: AppSettings) => void;
   onComplete: () => void;
 }) {
+  const t = useTranslation();
   return (
     <div className="onboarding-shell">
       <div className="onboarding-copy">
         <strong>Sessionary</strong>
-        <h1>Set up local session sources</h1>
-        <p>Sessionary reads local AI coding logs and stores metadata on this Mac. Source code, full prompts, and full responses are not uploaded.</p>
+        <h1>{t("onboarding.title")}</h1>
+        <p>{t("onboarding.body")}</p>
       </div>
       <SettingsEditor settings={settings} onChange={onChange} onSave={onComplete} onScan={onComplete} compact />
     </div>
@@ -801,6 +841,7 @@ function DetailPanel({
   onStartReview: (session: SessionRecord) => void;
   onFinishReview: (session: SessionRecord, status?: SessionStatus) => void;
 }) {
+  const t = useTranslation();
   const [note, setNote] = useState("");
   const [times, setTimes] = useState({ prompting: 0, waiting: 0, review: 0, repair: 0 });
 
@@ -821,33 +862,33 @@ function DetailPanel({
         <div className="detail-title">
           <span className="overlap-dot" />
           <div>
-            <h2>Overlap Summary</h2>
+            <h2>{t("projectTimeline.overlapSummary")}</h2>
             <p>{overlap.projectNames.join(" + ")}</p>
           </div>
         </div>
         <section className="detail-section">
-          <h3>Interval</h3>
+          <h3>{t("detail.interval")}</h3>
           <dl className="detail-stats">
             <div>
-              <dt>Started</dt>
-              <dd>{timeLabel(overlap.startedAt)}</dd>
+              <dt>{t("detail.started")}</dt>
+              <dd>{timeLabel(overlap.startedAt, t)}</dd>
             </div>
             <div>
-              <dt>Ended</dt>
-              <dd>{timeLabel(overlap.endedAt)}</dd>
+              <dt>{t("detail.ended")}</dt>
+              <dd>{timeLabel(overlap.endedAt, t)}</dd>
             </div>
             <div>
-              <dt>Duration</dt>
+              <dt>{t("detail.duration")}</dt>
               <dd>{secondsLabel(overlap.seconds)}</dd>
             </div>
             <div>
-              <dt>Sessions</dt>
+              <dt>{t("detail.sessions")}</dt>
               <dd>{overlap.sessionIds.length}</dd>
             </div>
           </dl>
         </section>
         <section className="detail-section">
-          <h3>Sessions</h3>
+          <h3>{t("detail.sessions")}</h3>
           <div className="compact-list">
             {overlapSessions.map((item) => (
               <SessionPill key={item.id} session={item} selected={false} onSelect={() => onSelect(item)} />
@@ -866,27 +907,27 @@ function DetailPanel({
         <div className="detail-title">
           <SlidersHorizontal size={18} />
           <div>
-            <h2>Selected Range</h2>
+            <h2>{t("detail.selectedRange")}</h2>
             <p>
-              {timeLabel(range.startedAt)}-{timeLabel(range.endedAt)}
+              {timeLabel(range.startedAt, t)}-{timeLabel(range.endedAt, t)}
             </p>
           </div>
         </div>
         <section className="detail-section">
-          <h3>Range</h3>
+          <h3>{t("detail.range")}</h3>
           <dl className="detail-stats">
             <div>
-              <dt>Projects</dt>
+              <dt>{t("detail.projects")}</dt>
               <dd>{projects.length}</dd>
             </div>
             <div>
-              <dt>Sessions</dt>
+              <dt>{t("detail.sessions")}</dt>
               <dd>{rangeSessions.length}</dd>
             </div>
           </dl>
         </section>
         <section className="detail-section">
-          <h3>Projects</h3>
+          <h3>{t("detail.projects")}</h3>
           <div className="file-list">{projects.map((project) => <span key={project}>{project}</span>)}</div>
         </section>
       </aside>
@@ -896,7 +937,7 @@ function DetailPanel({
   if (!session) {
     return (
       <aside className="detail-panel">
-        <EmptyState title="Select a session" />
+        <EmptyState title={t("detail.selectSession")} />
       </aside>
     );
   }
@@ -915,32 +956,32 @@ function DetailPanel({
         {(["useful", "needs_review", "needs_repair", "repaired", "failed", "discarded"] as SessionStatus[]).map((status) => (
           <button key={status} className={session.status === status ? "active" : ""} onClick={() => onPatch(session, { status })}>
             {statusIcon(status)}
-            {statusLabels[status]}
+            {t(statusKeys[status])}
           </button>
         ))}
       </div>
 
       <section className="detail-section">
-        <h3>Review Flow</h3>
+        <h3>{t("detail.reviewFlow")}</h3>
         <div className="review-actions">
           <button className={session.reviewStartedAt ? "active" : ""} onClick={() => onStartReview(session)}>
             <Play size={15} />
-            Start Review
+            {t("detail.startReview")}
           </button>
           <button onClick={() => onFinishReview(session, "useful")}>
             <Square size={15} />
-            Done
+            {t("detail.done")}
           </button>
           <button onClick={() => onFinishReview(session, "needs_repair")}>
             <Wrench size={15} />
-            Needs Repair
+            {t("detail.needsRepair")}
           </button>
         </div>
-        {session.reviewStartedAt && <small>Review running since {timeLabel(session.reviewStartedAt)}</small>}
+        {session.reviewStartedAt && <small>{t("detail.reviewRunningSince")} {timeLabel(session.reviewStartedAt, t)}</small>}
       </section>
 
       <section className="detail-section">
-        <h3>Time</h3>
+        <h3>{t("detail.time")}</h3>
         <div className="time-grid">
           {(["prompting", "waiting", "review", "repair"] as const).map((field) => (
             <label key={field}>
@@ -968,48 +1009,48 @@ function DetailPanel({
             })
           }
         >
-          Save time
+          {t("detail.saveTime")}
         </button>
       </section>
 
       <section className="detail-section">
-        <h3>Activity</h3>
+        <h3>{t("detail.activity")}</h3>
         <dl className="detail-stats">
           <div>
-            <dt>Started</dt>
-            <dd>{timeLabel(session.startedAt)}</dd>
+            <dt>{t("detail.started")}</dt>
+            <dd>{timeLabel(session.startedAt, t)}</dd>
           </div>
           <div>
-            <dt>Ended</dt>
-            <dd>{timeLabel(session.endedAt)}</dd>
+            <dt>{t("detail.ended")}</dt>
+            <dd>{timeLabel(session.endedAt, t)}</dd>
           </div>
           <div>
-            <dt>Duration</dt>
+            <dt>{t("detail.duration")}</dt>
             <dd>{secondsLabel(session.durationSeconds)}</dd>
           </div>
           <div>
-            <dt>Tokens</dt>
-            <dd>{session.tokenCount?.toLocaleString() ?? "n/a"}</dd>
+            <dt>{t("detail.tokens")}</dt>
+            <dd>{session.tokenCount?.toLocaleString() ?? t("common.notAvailable")}</dd>
           </div>
           <div>
-            <dt>Cost</dt>
+            <dt>{t("detail.cost")}</dt>
             <dd>{session.costAmount == null ? "n/a" : `$${session.costAmount.toFixed(4)}`}</dd>
           </div>
         </dl>
       </section>
 
       <section className="detail-section">
-        <h3>Files</h3>
+        <h3>{t("detail.files")}</h3>
         <div className="file-list">
-          {session.changedFiles.length === 0 ? <span>No file hints</span> : session.changedFiles.map((file) => <span key={file}>{file}</span>)}
+          {session.changedFiles.length === 0 ? <span>{t("detail.noFileHints")}</span> : session.changedFiles.map((file) => <span key={file}>{file}</span>)}
         </div>
       </section>
 
       <section className="detail-section">
-        <h3>Note</h3>
+        <h3>{t("detail.note")}</h3>
         <textarea value={note} onChange={(event) => setNote(event.target.value)} />
         <button className="primary-button" onClick={() => onPatch(session, { note })}>
-          Save note
+          {t("detail.saveNote")}
         </button>
       </section>
     </aside>
@@ -1032,6 +1073,11 @@ export function App() {
   const [zoomMinutes, setZoomMinutes] = useState<ZoomMinutes>(30);
   const [selectedOverlap, setSelectedOverlap] = useState<OverlapInterval>();
   const [selectedRange, setSelectedRange] = useState<RangeSelection>();
+  const locale = resolveLocale(
+    settingsState?.language ?? "system",
+    typeof navigator === "undefined" ? undefined : navigator.language
+  );
+  const t = useMemo(() => createTranslator(locale), [locale]);
 
   const selected = useMemo(() => {
     if (!ledger) return undefined;
@@ -1158,7 +1204,7 @@ export function App() {
 
   const refreshReport = async () => {
     if (!ledger) return;
-    const result = await generateReport(ledger.metrics.date);
+    const result = await generateReport(ledger.metrics.date, locale);
     setMarkdown(result.markdown);
     setExportedPath(result.exportedPath);
   };
@@ -1168,33 +1214,42 @@ export function App() {
   }, [view, ledger]);
 
   if (settingsState && !settingsState.onboardingCompleted) {
-    return <Onboarding settings={settingsState} onChange={setSettingsState} onComplete={completeOnboarding} />;
+    return (
+      <TranslationContext.Provider value={t}>
+        <Onboarding settings={settingsState} onChange={setSettingsState} onComplete={completeOnboarding} />
+      </TranslationContext.Provider>
+    );
   }
 
   if (loading && !ledger) {
     return (
-      <div className="boot-screen">
-        <RefreshCw className="spin" />
-        <span>Scanning local sessions</span>
-      </div>
+      <TranslationContext.Provider value={t}>
+        <div className="boot-screen">
+          <RefreshCw className="spin" />
+          <span>{t("app.loading")}</span>
+        </div>
+      </TranslationContext.Provider>
     );
   }
 
   if (!ledger) {
     return (
-      <div className="boot-screen">
-        <AlertCircle />
-        <span>{error ?? "Unable to load Sessionary"}</span>
-      </div>
+      <TranslationContext.Provider value={t}>
+        <div className="boot-screen">
+          <AlertCircle />
+          <span>{error ?? t("app.unableToLoad")}</span>
+        </div>
+      </TranslationContext.Provider>
     );
   }
 
   return (
+    <TranslationContext.Provider value={t}>
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
           <strong>Sessionary</strong>
-          <span>AI Coding Session Inbox</span>
+          <span>{t("brand.tagline")}</span>
         </div>
         <input className="date-input" type="date" value={date} onChange={(event) => void load(event.target.value)} />
         <nav>
@@ -1203,15 +1258,15 @@ export function App() {
             return (
               <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
                 <Icon size={17} />
-                {item.label}
+                {t(item.labelKey)}
               </button>
             );
           })}
         </nav>
         <div className="sources">
           <div className="sources-header">
-            <span>Sources</span>
-            <button title="Rescan" onClick={() => void load(date, true)}>
+            <span>{t("settings.sources")}</span>
+            <button title={t("sources.rescan")} onClick={() => void load(date, true)}>
               <RefreshCw size={15} className={scanning ? "spin" : ""} />
             </button>
           </div>
@@ -1221,7 +1276,7 @@ export function App() {
               <div>
                 <strong>{sourceLabels[source.source]}</strong>
                 <small>
-                  {source.enabled ? `${source.sessionsFound} sessions · ${source.errors} errors` : "disabled"}
+                  {source.enabled ? `${source.sessionsFound} ${t("common.sessions")} · ${source.errors} ${t("common.errors")}` : t("common.disabled")}
                 </small>
               </div>
             </div>
@@ -1278,7 +1333,7 @@ export function App() {
           onChange={setMarkdown}
           onCopy={() => void navigator.clipboard.writeText(markdown)}
           onExport={async () => {
-            const result = await exportReport(ledger.metrics.date, markdown);
+            const result = await exportReport(ledger.metrics.date, markdown, locale);
             setExportedPath(result.exportedPath);
           }}
         />
@@ -1303,5 +1358,6 @@ export function App() {
         onFinishReview={(session, status) => void runFinishReview(session, status)}
       />
     </div>
+    </TranslationContext.Provider>
   );
 }

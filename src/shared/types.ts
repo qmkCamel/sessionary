@@ -110,6 +110,7 @@ export interface AppSettings {
   onboardingCompleted: boolean;
   sourceConfigs: SourceConfig[];
   projectRoots: string[];
+  language: "system" | "en" | "zh-CN";
 }
 
 export interface ScanResult {

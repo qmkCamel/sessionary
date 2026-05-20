@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::models::{
-    AppSettings, SessionPatch, SessionRecord, SessionSource, SessionStatus, SourceConfig,
-    SourceStatus, TimeFieldState,
+    AppSettings, LanguageSetting, SessionPatch, SessionRecord, SessionSource, SessionStatus,
+    SourceConfig, SourceStatus, TimeFieldState,
 };
 use crate::util::local_date;
 
@@ -154,6 +154,10 @@ fn ensure_default_source_configs(conn: &Connection) -> anyhow::Result<()> {
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('project_roots', '[]')",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'system')",
         [],
     )?;
     Ok(())
@@ -487,6 +491,15 @@ pub fn get_settings() -> anyhow::Result<AppSettings> {
         .optional()?
         .map(parse_json::<Vec<String>>)
         .unwrap_or_default();
+    let language = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='language'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|value| LanguageSetting::try_from(value.as_str()).ok())
+        .unwrap_or_default();
     let mut statement =
         conn.prepare("SELECT source, enabled, paths_json FROM source_configs ORDER BY source")?;
     let configs = statement
@@ -505,6 +518,7 @@ pub fn get_settings() -> anyhow::Result<AppSettings> {
         onboarding_completed,
         source_configs: configs,
         project_roots,
+        language,
     })
 }
 
@@ -524,6 +538,11 @@ pub fn save_settings(settings: AppSettings) -> anyhow::Result<AppSettings> {
         "INSERT INTO app_settings (key, value) VALUES ('project_roots', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         [serde_json::to_string(&settings.project_roots)?],
+    )?;
+    tx.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('language', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [settings.language.as_str()],
     )?;
     for config in &settings.source_configs {
         tx.execute(

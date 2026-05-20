@@ -218,12 +218,48 @@ pub struct SourceConfig {
     pub paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LanguageSetting {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+}
+
+impl LanguageSetting {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LanguageSetting::System => "system",
+            LanguageSetting::En => "en",
+            LanguageSetting::ZhCn => "zh-CN",
+        }
+    }
+}
+
+impl TryFrom<&str> for LanguageSetting {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "system" => Ok(LanguageSetting::System),
+            "en" => Ok(LanguageSetting::En),
+            "zh-CN" => Ok(LanguageSetting::ZhCn),
+            other => anyhow::bail!("unknown language setting: {other}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub onboarding_completed: bool,
     pub source_configs: Vec<SourceConfig>,
     pub project_roots: Vec<String>,
+    #[serde(default)]
+    pub language: LanguageSetting,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,4 +278,35 @@ pub struct ScanResult {
 pub struct ReportResult {
     pub markdown: String,
     pub exported_path: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn app_settings_defaults_language_for_existing_payloads() {
+        let settings: AppSettings = serde_json::from_value(json!({
+            "onboardingCompleted": true,
+            "sourceConfigs": [],
+            "projectRoots": []
+        }))
+        .expect("settings deserialize");
+
+        assert_eq!(settings.language, LanguageSetting::System);
+    }
+
+    #[test]
+    fn app_settings_accepts_saved_language() {
+        let settings: AppSettings = serde_json::from_value(json!({
+            "onboardingCompleted": true,
+            "sourceConfigs": [],
+            "projectRoots": [],
+            "language": "zh-CN"
+        }))
+        .expect("settings deserialize");
+
+        assert_eq!(settings.language, LanguageSetting::ZhCn);
+    }
 }

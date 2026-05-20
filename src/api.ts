@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Locale } from "./i18n";
 import type { AppSettings, DayLedger, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus } from "./shared/types";
 import { fallbackLedger, fallbackReport, fallbackScan, fallbackSettings, fallbackUpdate, saveFallbackSettings } from "./data/fallback";
 
@@ -42,13 +43,13 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
   return invokeOrFallback("save_settings", { settings }, () => saveFallbackSettings(settings));
 }
 
-export async function generateReport(date: string): Promise<ReportResult> {
-  return invokeOrFallback("generate_report", { date }, () => fallbackReport(date));
+export async function generateReport(date: string, locale: Locale = "en"): Promise<ReportResult> {
+  return invokeOrFallback("generate_report", { date }, () => fallbackReport(date, locale));
 }
 
-export async function exportReport(date: string, markdown: string): Promise<ReportResult> {
+export async function exportReport(date: string, markdown: string, locale: Locale = "en"): Promise<ReportResult> {
   return invokeOrFallback("export_report", { date, markdown }, () => ({
-    ...fallbackReport(date),
+    ...fallbackReport(date, locale),
     markdown,
     exportedPath: "/tmp/sessionary-report.md"
   }));

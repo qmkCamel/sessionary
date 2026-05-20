@@ -777,6 +777,12 @@ nav button:hover,
   border-color: #20392f;
 }
 
+.settings-actions .primary-button {
+  background: #20392f;
+  color: #fff;
+  border-color: #20392f;
+}
+
 .detail-stats {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
