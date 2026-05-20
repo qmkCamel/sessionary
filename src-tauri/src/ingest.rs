@@ -3,48 +3,31 @@ use std::path::PathBuf;
 use walkdir::WalkDir;
 
 use crate::db;
-use crate::models::{ScanResult, SessionRecord, SessionSource, SourceStatus};
+use crate::models::{ScanResult, SessionRecord, SessionSource, SourceConfig, SourceStatus};
 use crate::parsers::{claude::parse_claude_file, codex::parse_codex_file};
 use crate::util::stable_id;
 
-fn home_path(parts: &[&str]) -> PathBuf {
-    let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-    for part in parts {
-        path.push(part);
-    }
-    path
+fn source_configs() -> anyhow::Result<Vec<SourceConfig>> {
+    Ok(db::get_settings()?.source_configs)
 }
 
-fn source_paths() -> Vec<(SessionSource, Vec<PathBuf>)> {
-    vec![
-        (
-            SessionSource::Codex,
-            vec![
-                home_path(&[".codex", "sessions"]),
-                home_path(&[".codex", "archived_sessions"]),
-            ],
-        ),
-        (
-            SessionSource::Claude,
-            vec![home_path(&[".claude", "projects"]), home_path(&[".claude"])],
-        ),
-    ]
-}
-
-pub fn source_status_paths() -> Vec<(SessionSource, String)> {
-    source_paths()
+pub fn source_status_paths() -> anyhow::Result<Vec<(SessionSource, bool, String)>> {
+    Ok(source_configs()?
         .into_iter()
-        .map(|(source, paths)| {
+        .map(|config| {
             (
-                source,
-                paths
+                config.source,
+                config.enabled,
+                config
+                    .paths
                     .iter()
-                    .map(|path| path.display().to_string())
+                    .filter(|path| !path.trim().is_empty())
+                    .cloned()
                     .collect::<Vec<_>>()
                     .join(", "),
             )
         })
-        .collect()
+        .collect())
 }
 
 fn collect_jsonl(paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -71,6 +54,15 @@ fn collect_jsonl(paths: &[PathBuf]) -> Vec<PathBuf> {
     files.sort();
     files.dedup();
     files
+}
+
+fn expand_path(value: &str) -> PathBuf {
+    if let Some(rest) = value.strip_prefix("~/") {
+        return dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("/"))
+            .join(rest);
+    }
+    PathBuf::from(value)
 }
 
 fn scan_source(
@@ -120,7 +112,7 @@ fn scan_source(
 }
 
 pub fn source_status() -> anyhow::Result<Vec<SourceStatus>> {
-    db::source_status(&source_status_paths())
+    db::source_status(&source_status_paths()?)
 }
 
 pub fn scan_sources() -> anyhow::Result<ScanResult> {
@@ -131,8 +123,18 @@ pub fn scan_sources() -> anyhow::Result<ScanResult> {
     let mut errors = 0_usize;
     let mut finished_at = started_at.clone();
 
-    for (source, paths) in source_paths() {
-        let (files, sessions, source_errors, source_finished_at) = scan_source(source, &paths)?;
+    for config in source_configs()? {
+        if !config.enabled {
+            continue;
+        }
+        let paths = config
+            .paths
+            .iter()
+            .filter(|path| !path.trim().is_empty())
+            .map(|path| expand_path(path))
+            .collect::<Vec<_>>();
+        let (files, sessions, source_errors, source_finished_at) =
+            scan_source(config.source, &paths)?;
         files_scanned += files;
         sessions_found += sessions;
         errors += source_errors;

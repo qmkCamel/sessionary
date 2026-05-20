@@ -4,7 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::models::{
-    SessionPatch, SessionRecord, SessionSource, SessionStatus, SourceStatus, TimeFieldState,
+    AppSettings, SessionPatch, SessionRecord, SessionSource, SessionStatus, SourceConfig,
+    SourceStatus, TimeFieldState,
 };
 use crate::util::local_date;
 
@@ -33,6 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   waiting_seconds INTEGER NOT NULL DEFAULT 0,
   review_seconds INTEGER NOT NULL DEFAULT 0,
   repair_seconds INTEGER NOT NULL DEFAULT 0,
+  review_started_at TEXT,
   time_fields_json TEXT NOT NULL DEFAULT '{"prompting":"estimated","waiting":"estimated","review":"estimated","repair":"estimated"}',
   summary TEXT NOT NULL DEFAULT '',
   source_file TEXT NOT NULL DEFAULT '',
@@ -57,6 +59,18 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   error_count INTEGER NOT NULL DEFAULT 0,
   cursor TEXT NOT NULL DEFAULT '',
   error_message TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_configs (
+  source TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  paths_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 "#;
 
@@ -84,6 +98,64 @@ pub fn init() -> anyhow::Result<()> {
     fs::create_dir_all(app_dir()?)?;
     let conn = Connection::open(db_path()?)?;
     conn.execute_batch(SCHEMA)?;
+    ensure_column(&conn, "sessions", "review_started_at", "TEXT")?;
+    ensure_default_source_configs(&conn)?;
+    Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> anyhow::Result<()> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|existing| existing == column) {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))?;
+    }
+    Ok(())
+}
+
+fn default_source_paths(source: SessionSource) -> Vec<String> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    match source {
+        SessionSource::Codex => vec![
+            home.join(".codex").join("sessions").display().to_string(),
+            home.join(".codex")
+                .join("archived_sessions")
+                .display()
+                .to_string(),
+        ],
+        SessionSource::Claude => vec![
+            home.join(".claude").join("projects").display().to_string(),
+            home.join(".claude").display().to_string(),
+        ],
+    }
+}
+
+fn ensure_default_source_configs(conn: &Connection) -> anyhow::Result<()> {
+    for source in [SessionSource::Codex, SessionSource::Claude] {
+        conn.execute(
+            "INSERT OR IGNORE INTO source_configs (source, enabled, paths_json) VALUES (?1, 1, ?2)",
+            params![
+                source.as_str(),
+                serde_json::to_string(&default_source_paths(source))?
+            ],
+        )?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('onboarding_completed', 'false')",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('project_roots', '[]')",
+        [],
+    )?;
     Ok(())
 }
 
@@ -121,6 +193,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         waiting_seconds: row.get("waiting_seconds")?,
         review_seconds: row.get("review_seconds")?,
         repair_seconds: row.get("repair_seconds")?,
+        review_started_at: row.get("review_started_at")?,
         time_fields: parse_json(time_fields_json),
         summary: row.get("summary")?,
         source_file: row.get("source_file")?,
@@ -143,11 +216,11 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
               id, source, source_session_id, project_name, project_path, cwd, started_at, ended_at,
               duration_seconds, user_message_count, assistant_message_count, tool_call_count,
               token_count, cost_amount, status, status_updated_at, note, confidence, changed_files_json,
-              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, time_fields_json,
+              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, time_fields_json,
               summary, source_file, git_branch, git_dirty
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
             )
             ON CONFLICT(id) DO UPDATE SET
               source=excluded.source,
@@ -202,6 +275,7 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
                 session.waiting_seconds,
                 session.review_seconds,
                 session.repair_seconds,
+                session.review_started_at,
                 serde_json::to_string(&session.time_fields)?,
                 session.summary,
                 session.source_file,
@@ -297,6 +371,71 @@ pub fn update_session(id: &str, patch: SessionPatch) -> anyhow::Result<Option<Se
     get_session(id)
 }
 
+pub fn start_review(id: &str) -> anyhow::Result<Option<SessionRecord>> {
+    let Some(current) = get_session(id)? else {
+        return Ok(None);
+    };
+    let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let status = if current.status == SessionStatus::Unknown {
+        SessionStatus::NeedsReview
+    } else {
+        current.status
+    };
+    let conn = connection()?;
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET review_started_at=?1, status=?2, status_updated_at=?1, updated_at=CURRENT_TIMESTAMP
+        WHERE id=?3
+        "#,
+        params![started_at, status.as_str(), id],
+    )?;
+    get_session(id)
+}
+
+pub fn finish_review(
+    id: &str,
+    status: Option<SessionStatus>,
+) -> anyhow::Result<Option<SessionRecord>> {
+    let Some(current) = get_session(id)? else {
+        return Ok(None);
+    };
+    let finished_at = chrono::Utc::now();
+    let mut review_seconds = current.review_seconds;
+    if let Some(started_at) = current.review_started_at.as_deref() {
+        if let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) {
+            let elapsed = (finished_at - started.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0);
+            review_seconds = review_seconds.saturating_add(elapsed);
+        }
+    }
+    let mut time_fields = current.time_fields;
+    time_fields.review = TimeFieldState::Manual;
+    let next_status = status.unwrap_or(SessionStatus::Useful);
+    let conn = connection()?;
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET review_started_at=NULL,
+            review_seconds=?1,
+            time_fields_json=?2,
+            status=?3,
+            status_updated_at=?4,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE id=?5
+        "#,
+        params![
+            review_seconds,
+            serde_json::to_string(&time_fields)?,
+            next_status.as_str(),
+            finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            id
+        ],
+    )?;
+    get_session(id)
+}
+
 pub fn record_scan_run(
     id: &str,
     source: SessionSource,
@@ -328,11 +467,84 @@ pub fn record_scan_run(
     Ok(())
 }
 
-pub fn source_status(paths: &[(SessionSource, String)]) -> anyhow::Result<Vec<SourceStatus>> {
+pub fn get_settings() -> anyhow::Result<AppSettings> {
+    let conn = connection()?;
+    let onboarding_completed = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='onboarding_completed'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|value| value == "true")
+        .unwrap_or(false);
+    let project_roots = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='project_roots'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(parse_json::<Vec<String>>)
+        .unwrap_or_default();
+    let mut statement =
+        conn.prepare("SELECT source, enabled, paths_json FROM source_configs ORDER BY source")?;
+    let configs = statement
+        .query_map([], |row| {
+            let source_text: String = row.get(0)?;
+            let paths_json: String = row.get(2)?;
+            Ok(SourceConfig {
+                source: SessionSource::try_from(source_text.as_str())
+                    .unwrap_or(SessionSource::Codex),
+                enabled: row.get::<_, i64>(1)? == 1,
+                paths: parse_json(paths_json),
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(AppSettings {
+        onboarding_completed,
+        source_configs: configs,
+        project_roots,
+    })
+}
+
+pub fn save_settings(settings: AppSettings) -> anyhow::Result<AppSettings> {
+    let mut conn = connection()?;
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('onboarding_completed', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [if settings.onboarding_completed {
+            "true"
+        } else {
+            "false"
+        }],
+    )?;
+    tx.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('project_roots', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [serde_json::to_string(&settings.project_roots)?],
+    )?;
+    for config in &settings.source_configs {
+        tx.execute(
+            "INSERT INTO source_configs (source, enabled, paths_json, updated_at) VALUES (?1, ?2, ?3, CURRENT_TIMESTAMP)
+             ON CONFLICT(source) DO UPDATE SET enabled=excluded.enabled, paths_json=excluded.paths_json, updated_at=CURRENT_TIMESTAMP",
+            params![
+                config.source.as_str(),
+                if config.enabled { 1 } else { 0 },
+                serde_json::to_string(&config.paths)?
+            ],
+        )?;
+    }
+    tx.commit()?;
+    get_settings()
+}
+
+pub fn source_status(paths: &[(SessionSource, bool, String)]) -> anyhow::Result<Vec<SourceStatus>> {
     let conn = connection()?;
     paths
         .iter()
-        .map(|(source, path)| {
+        .map(|(source, enabled, path)| {
             let row = conn
                 .query_row(
                     r#"
@@ -352,7 +564,7 @@ pub fn source_status(paths: &[(SessionSource, String)]) -> anyhow::Result<Vec<So
                 .optional()?;
             Ok(SourceStatus {
                 source: *source,
-                enabled: true,
+                enabled: *enabled,
                 path: path.clone(),
                 files_scanned: row.as_ref().map(|item| item.1 as usize).unwrap_or(0),
                 sessions_found: row.as_ref().map(|item| item.2 as usize).unwrap_or(0),

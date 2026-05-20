@@ -124,6 +124,7 @@ pub struct SessionRecord {
     pub waiting_seconds: i64,
     pub review_seconds: i64,
     pub repair_seconds: i64,
+    pub review_started_at: Option<String>,
     pub time_fields: TimeFields,
     pub summary: String,
     pub source_file: String,
@@ -207,6 +208,22 @@ pub struct SourceStatus {
     pub sessions_found: usize,
     pub errors: usize,
     pub last_scan_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceConfig {
+    pub source: SessionSource,
+    pub enabled: bool,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    pub onboarding_completed: bool,
+    pub source_configs: Vec<SourceConfig>,
+    pub project_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

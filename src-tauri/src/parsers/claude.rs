@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,6 +13,13 @@ fn timestamp_of(event: &Value) -> Option<String> {
         .or_else(|| event.get("created_at"))
         .or_else(|| event.get("createdAt"))
         .or_else(|| event.get("time"))
+        .or_else(|| event.get("start_time"))
+        .or_else(|| event.get("startTime"))
+        .or_else(|| {
+            event
+                .get("attributes")
+                .and_then(|attributes| attributes.get("timestamp"))
+        })
         .and_then(|value| {
             if let Some(text) = value.as_str() {
                 normalize_timestamp(text)
@@ -30,22 +37,46 @@ fn timestamp_of(event: &Value) -> Option<String> {
         })
 }
 
+fn attr<'a>(event: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+    for key in keys {
+        if let Some(value) = event.get(*key) {
+            return Some(value);
+        }
+        if let Some(value) = event
+            .get("attributes")
+            .and_then(|attributes| attributes.get(*key))
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
 fn role_of(event: &Value) -> String {
-    event
-        .get("role")
-        .or_else(|| event.get("type"))
-        .or_else(|| event.get("message").and_then(|message| message.get("role")))
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    attr(
+        event,
+        &["role", "type", "event.name", "name", "message.role"],
+    )
+    .or_else(|| event.get("message").and_then(|message| message.get("role")))
+    .and_then(Value::as_str)
+    .unwrap_or_default()
+    .to_string()
 }
 
 fn message_text(event: &Value) -> String {
-    let content = event.get("content").or_else(|| {
-        event
-            .get("message")
-            .and_then(|message| message.get("content"))
-    });
+    let content = event
+        .get("content")
+        .or_else(|| {
+            event
+                .get("message")
+                .and_then(|message| message.get("content"))
+        })
+        .or_else(|| {
+            attr(
+                event,
+                &["content", "message.content", "prompt", "completion"],
+            )
+        });
     match content {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Array(items)) => items
@@ -65,21 +96,79 @@ fn message_text(event: &Value) -> String {
 }
 
 fn usage_tokens(event: &Value) -> i64 {
-    let usage = event.get("usage").or_else(|| {
-        event
-            .get("message")
-            .and_then(|message| message.get("usage"))
-    });
+    let usage = event
+        .get("usage")
+        .or_else(|| {
+            event
+                .get("message")
+                .and_then(|message| message.get("usage"))
+        })
+        .or_else(|| event.get("attributes"));
     let Some(usage) = usage else {
         return 0;
     };
     let read = |key: &str| usage.get(key).and_then(Value::as_i64).unwrap_or(0);
     read("input_tokens")
         + read("inputTokens")
+        + read("claude.usage.input_tokens")
+        + read("llm.usage.input_tokens")
         + read("output_tokens")
         + read("outputTokens")
+        + read("claude.usage.output_tokens")
+        + read("llm.usage.output_tokens")
         + read("cache_creation_input_tokens")
         + read("cache_read_input_tokens")
+}
+
+fn usage_cost(event: &Value) -> f64 {
+    let usage = event
+        .get("usage")
+        .or_else(|| {
+            event
+                .get("message")
+                .and_then(|message| message.get("usage"))
+        })
+        .or_else(|| event.get("attributes"));
+    let Some(usage) = usage else {
+        return 0.0;
+    };
+    for key in [
+        "cost_usd",
+        "costUsd",
+        "cost",
+        "total_cost_usd",
+        "totalCostUsd",
+        "claude.cost.usd",
+        "llm.usage.cost_usd",
+    ] {
+        if let Some(value) = usage.get(key).and_then(Value::as_f64) {
+            return value;
+        }
+    }
+    0.0
+}
+
+fn file_hints(event: &Value) -> Vec<String> {
+    let mut files = Vec::new();
+    for key in ["file_path", "filePath", "path", "filename"] {
+        if let Some(path) = attr(event, &[key]).and_then(Value::as_str) {
+            files.push(path.to_string());
+        }
+    }
+    if let Some(result) = event
+        .get("toolUseResult")
+        .or_else(|| event.get("tool_use_result"))
+    {
+        if let Some(path) = result
+            .get("file_path")
+            .or_else(|| result.get("filePath"))
+            .or_else(|| result.get("path"))
+            .and_then(Value::as_str)
+        {
+            files.push(path.to_string());
+        }
+    }
+    files
 }
 
 fn project_from_claude_path(file_path: &Path) -> PathBuf {
@@ -118,15 +207,22 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
 
     let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     for event in events {
-        let session_id = event
-            .get("sessionId")
-            .or_else(|| event.get("session_id"))
-            .or_else(|| event.get("conversationId"))
-            .or_else(|| event.get("conversation_id"))
-            .or_else(|| event.get("uuid"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| stable_id(&file_path.display().to_string()));
+        let session_id = attr(
+            &event,
+            &[
+                "sessionId",
+                "session_id",
+                "conversationId",
+                "conversation_id",
+                "uuid",
+                "session.id",
+                "claude.session.id",
+                "prompt.id",
+            ],
+        )
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .unwrap_or_else(|| stable_id(&file_path.display().to_string()));
         groups.entry(session_id).or_default().push(event);
     }
 
@@ -145,12 +241,20 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
         let mut assistant_message_count = 0_i64;
         let mut tool_call_count = 0_i64;
         let mut token_count = 0_i64;
+        let mut cost_amount = 0.0_f64;
+        let mut changed_files = BTreeSet::new();
 
         for event in &group {
             if let Some(path) = event
                 .get("cwd")
                 .or_else(|| event.get("projectPath"))
                 .or_else(|| event.get("project_path"))
+                .or_else(|| {
+                    attr(
+                        event,
+                        &["cwd", "project.path", "projectPath", "project_path"],
+                    )
+                })
                 .and_then(Value::as_str)
             {
                 cwd = path.to_string();
@@ -172,6 +276,10 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
                 tool_call_count += 1;
             }
             token_count += usage_tokens(event);
+            cost_amount += usage_cost(event);
+            for file in file_hints(event) {
+                changed_files.insert(file);
+            }
         }
 
         let started_at = timestamps.first().cloned().expect("timestamp exists");
@@ -195,6 +303,9 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
         };
         let git = git_info(&cwd_path);
         let project_path = git.root;
+        for file in &git.changed_files {
+            changed_files.insert(file.clone());
+        }
 
         sessions.push(SessionRecord {
             id: format!("claude:{source_session_id}"),
@@ -210,16 +321,17 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
             assistant_message_count,
             tool_call_count,
             token_count: (token_count > 0).then_some(token_count),
-            cost_amount: None,
+            cost_amount: (cost_amount > 0.0).then_some(cost_amount),
             status: SessionStatus::Unknown,
             status_updated_at: None,
             note: String::new(),
             confidence: if cwd_path.exists() { 0.84 } else { 0.65 },
-            changed_files: Vec::new(),
+            changed_files: changed_files.into_iter().take(30).collect(),
             prompting_seconds,
             waiting_seconds,
             review_seconds,
             repair_seconds: 0,
+            review_started_at: None,
             time_fields: TimeFields::default(),
             summary: truncate(&first_user_message, 180),
             source_file: file_path.display().to_string(),
@@ -243,5 +355,22 @@ mod tests {
         assert_eq!(sessions[0].source_session_id, "claude-fixture-1");
         assert_eq!(sessions[0].user_message_count, 1);
         assert_eq!(sessions[0].tool_call_count, 1);
+    }
+
+    #[test]
+    fn parses_otel_style_claude_session() {
+        let path = Path::new("../fixtures/claude/otel.jsonl");
+        let sessions = parse_claude_file(path).expect("fixture parses");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].source_session_id, "claude-otel-1");
+        assert_eq!(sessions[0].user_message_count, 1);
+        assert_eq!(sessions[0].assistant_message_count, 1);
+        assert_eq!(sessions[0].tool_call_count, 1);
+        assert_eq!(sessions[0].token_count, Some(66));
+        assert_eq!(sessions[0].cost_amount, Some(0.012));
+        assert!(sessions[0]
+            .changed_files
+            .iter()
+            .any(|file| file.ends_with("src-tauri/src/parsers/claude.rs")));
     }
 }

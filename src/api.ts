@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DayLedger, ReportResult, ScanResult, SessionPatch, SessionRecord } from "./shared/types";
-import { fallbackLedger, fallbackReport, fallbackScan, fallbackUpdate } from "./data/fallback";
+import type { AppSettings, DayLedger, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus } from "./shared/types";
+import { fallbackLedger, fallbackReport, fallbackScan, fallbackSettings, fallbackUpdate, saveFallbackSettings } from "./data/fallback";
 
 async function invokeOrFallback<T>(command: string, args: Record<string, unknown> | undefined, fallback: () => T): Promise<T> {
   try {
@@ -24,6 +24,22 @@ export async function getDay(date?: string): Promise<DayLedger> {
 
 export async function patchSession(id: string, patch: SessionPatch): Promise<SessionRecord> {
   return invokeOrFallback("update_session", { id, patch }, () => fallbackUpdate(id, patch));
+}
+
+export async function startReview(id: string): Promise<SessionRecord> {
+  return invokeOrFallback("start_review", { id }, () => fallbackUpdate(id, { status: "needs_review" }));
+}
+
+export async function finishReview(id: string, status: SessionStatus = "useful"): Promise<SessionRecord> {
+  return invokeOrFallback("finish_review", { id, status }, () => fallbackUpdate(id, { status }));
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  return invokeOrFallback("get_settings", undefined, fallbackSettings);
+}
+
+export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
+  return invokeOrFallback("save_settings", { settings }, () => saveFallbackSettings(settings));
 }
 
 export async function generateReport(date: string): Promise<ReportResult> {

@@ -316,6 +316,7 @@ nav button:hover,
   position: relative;
   height: 42px;
   border-block: 1px solid #dde2da;
+  cursor: crosshair;
   background:
     repeating-linear-gradient(90deg, transparent 0, transparent 11.9%, rgba(70, 80, 76, 0.08) 12%, transparent 12.2%),
     rgba(245, 247, 243, 0.72);
@@ -329,6 +330,21 @@ nav button:hover,
   border-radius: 0;
   background: rgba(168, 103, 27, 0.14);
   z-index: 0;
+}
+
+.overlap-band.selected {
+  background: rgba(168, 103, 27, 0.28);
+  outline: 2px solid rgba(168, 103, 27, 0.45);
+}
+
+.range-band {
+  position: absolute;
+  top: 30px;
+  bottom: 0;
+  border: 1px dashed rgba(51, 95, 141, 0.7);
+  background: rgba(51, 95, 141, 0.12);
+  z-index: 0;
+  pointer-events: none;
 }
 
 .timeline-block {
@@ -426,17 +442,31 @@ nav button:hover,
 
 .queue-actions,
 .filter-bar,
-.toolbar {
+.toolbar,
+.timeline-toolbar,
+.settings-actions,
+.review-actions,
+.segmented-control {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
 
 .queue-actions button,
-.filter-bar button {
+.filter-bar button,
+.segmented-control button,
+.settings-actions button,
+.review-actions button {
   padding: 8px 10px;
   background: #fff;
   border-color: var(--line);
+}
+
+.segmented-control button.active,
+.review-actions button.active {
+  background: #20392f;
+  color: #fff;
+  border-color: #20392f;
 }
 
 .session-row {
@@ -546,6 +576,11 @@ nav button:hover,
   justify-content: space-between;
 }
 
+.overlap-list button.selected {
+  border-color: rgba(168, 103, 27, 0.55);
+  background: #fff7e8;
+}
+
 .overlap-list em {
   font-style: normal;
   color: var(--amber);
@@ -585,6 +620,92 @@ nav button:hover,
   gap: 18px;
   align-content: start;
   box-shadow: none;
+}
+
+.onboarding-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.7fr) minmax(520px, 1fr);
+  gap: 28px;
+  padding: 38px;
+  background:
+    linear-gradient(90deg, rgba(63, 107, 90, 0.10), transparent 42%),
+    #f4f5f1;
+}
+
+.onboarding-copy {
+  align-self: start;
+  display: grid;
+  gap: 14px;
+  max-width: 520px;
+}
+
+.onboarding-copy h1 {
+  margin: 0;
+  font-size: 36px;
+  line-height: 1.05;
+}
+
+.onboarding-copy p {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.settings-editor {
+  display: grid;
+  gap: 14px;
+}
+
+.settings-editor.compact {
+  align-self: start;
+}
+
+.settings-editor textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+.settings-actions {
+  justify-content: flex-end;
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.timeline-toolbar {
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.review-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.overlap-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--amber);
+  flex: 0 0 auto;
 }
 
 .detail-title {

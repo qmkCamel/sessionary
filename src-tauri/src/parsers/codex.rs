@@ -91,6 +91,20 @@ fn token_total(payload: &Value) -> Option<i64> {
         .and_then(Value::as_i64)
 }
 
+fn cost_total(payload: &Value) -> Option<f64> {
+    payload
+        .get("info")
+        .and_then(|info| info.get("total_token_usage").or_else(|| info.get("usage")))
+        .and_then(|usage| {
+            usage
+                .get("cost_usd")
+                .or_else(|| usage.get("costUsd"))
+                .or_else(|| usage.get("cost"))
+                .or_else(|| usage.get("total_cost_usd"))
+        })
+        .and_then(Value::as_f64)
+}
+
 fn basename(path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -111,6 +125,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     let mut assistant_message_count = 0_i64;
     let mut tool_call_count = 0_i64;
     let mut token_count: Option<i64> = None;
+    let mut cost_amount: Option<f64> = None;
     let mut timestamps = Vec::new();
     let mut changed_files = BTreeSet::new();
 
@@ -161,6 +176,9 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                 "token_count" => {
                     if let Some(total) = token_total(payload) {
                         token_count = Some(token_count.unwrap_or(0).max(total));
+                    }
+                    if let Some(cost) = cost_total(payload) {
+                        cost_amount = Some(cost_amount.unwrap_or(0.0).max(cost));
                     }
                 }
                 _ => {}
@@ -240,6 +258,9 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     let git = git_info(&cwd_path);
     let project_path = git.root;
     let project_name = basename(&project_path);
+    for file in &git.changed_files {
+        changed_files.insert(file.clone());
+    }
 
     Ok(Some(SessionRecord {
         id: format!("codex:{source_session_id}"),
@@ -259,16 +280,17 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
         assistant_message_count,
         tool_call_count,
         token_count,
-        cost_amount: None,
+        cost_amount,
         status: SessionStatus::Unknown,
         status_updated_at: None,
         note: String::new(),
         confidence: if cwd_path.exists() { 0.90 } else { 0.72 },
-        changed_files: changed_files.into_iter().collect(),
+        changed_files: changed_files.into_iter().take(30).collect(),
         prompting_seconds,
         waiting_seconds,
         review_seconds,
         repair_seconds: 0,
+        review_started_at: None,
         time_fields: TimeFields::default(),
         summary: truncate(&first_user_message, 180),
         source_file: file_path.display().to_string(),

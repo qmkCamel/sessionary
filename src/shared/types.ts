@@ -35,6 +35,7 @@ export interface SessionRecord {
   waitingSeconds: number;
   reviewSeconds: number;
   repairSeconds: number;
+  reviewStartedAt: string | null;
   timeFields: Record<"prompting" | "waiting" | "review" | "repair", TimeFieldState>;
   summary: string;
   sourceFile: string;
@@ -97,6 +98,18 @@ export interface SourceStatus {
   sessionsFound: number;
   errors: number;
   lastScanAt: string | null;
+}
+
+export interface SourceConfig {
+  source: SessionSource;
+  enabled: boolean;
+  paths: string[];
+}
+
+export interface AppSettings {
+  onboardingCompleted: boolean;
+  sourceConfigs: SourceConfig[];
+  projectRoots: string[];
 }
 
 export interface ScanResult {

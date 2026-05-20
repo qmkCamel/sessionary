@@ -271,6 +271,7 @@ mod tests {
             waiting_seconds: 540,
             review_seconds: 60,
             repair_seconds: 0,
+            review_started_at: None,
             time_fields: TimeFields::default(),
             summary: String::new(),
             source_file: String::new(),

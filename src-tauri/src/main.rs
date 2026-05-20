@@ -7,7 +7,9 @@ mod parsers;
 mod report;
 mod util;
 
-use models::{DayLedger, ReportResult, ScanResult, SessionPatch, SessionRecord};
+use models::{
+    AppSettings, DayLedger, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus,
+};
 
 #[tauri::command]
 fn scan_sources() -> Result<ScanResult, String> {
@@ -40,6 +42,30 @@ fn update_session(id: String, patch: SessionPatch) -> Result<SessionRecord, Stri
 }
 
 #[tauri::command]
+fn start_review(id: String) -> Result<SessionRecord, String> {
+    db::start_review(&id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "session not found".to_string())
+}
+
+#[tauri::command]
+fn finish_review(id: String, status: Option<SessionStatus>) -> Result<SessionRecord, String> {
+    db::finish_review(&id, status)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "session not found".to_string())
+}
+
+#[tauri::command]
+fn get_settings() -> Result<AppSettings, String> {
+    db::get_settings().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_settings(settings: AppSettings) -> Result<AppSettings, String> {
+    db::save_settings(settings).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn generate_report(date: String) -> Result<ReportResult, String> {
     report::build_report(&date).map_err(|error| error.to_string())
 }
@@ -57,6 +83,10 @@ fn main() {
             get_day,
             latest_date,
             update_session,
+            start_review,
+            finish_review,
+            get_settings,
+            save_settings,
             generate_report,
             export_report
         ])
