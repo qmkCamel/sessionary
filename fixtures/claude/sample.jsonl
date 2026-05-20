@@ -1,3 +1,3 @@
-{"timestamp":"2026-05-19T01:05:00.000Z","sessionId":"claude-fixture-1","type":"user","cwd":"/Users/edge/work/sessionary","content":"Check the inbox interactions."}
-{"timestamp":"2026-05-19T01:09:00.000Z","sessionId":"claude-fixture-1","type":"tool_use","cwd":"/Users/edge/work/sessionary","name":"Edit"}
-{"timestamp":"2026-05-19T01:15:00.000Z","sessionId":"claude-fixture-1","type":"assistant","cwd":"/Users/edge/work/sessionary","message":{"role":"assistant","content":"Inbox interactions are wired."},"usage":{"input_tokens":100,"output_tokens":50}}
+{"timestamp":"2026-05-19T01:05:00.000Z","sessionId":"claude-fixture-1","type":"user","cwd":"/Users/alex/work/sessionary","content":"Check the inbox interactions."}
+{"timestamp":"2026-05-19T01:09:00.000Z","sessionId":"claude-fixture-1","type":"tool_use","cwd":"/Users/alex/work/sessionary","name":"Edit"}
+{"timestamp":"2026-05-19T01:15:00.000Z","sessionId":"claude-fixture-1","type":"assistant","cwd":"/Users/alex/work/sessionary","message":{"role":"assistant","content":"Inbox interactions are wired."},"usage":{"input_tokens":100,"output_tokens":50}}

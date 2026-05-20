@@ -36,10 +36,10 @@ describe("fallback data", () => {
       ...settings,
       onboardingCompleted: false,
       language: "zh-CN",
-      projectRoots: ["/Users/edge/side/sessionary"]
+      projectRoots: ["/Users/alex/work/sessionary"]
     });
 
-    expect(saved.projectRoots).toEqual(["/Users/edge/side/sessionary"]);
+    expect(saved.projectRoots).toEqual(["/Users/alex/work/sessionary"]);
     expect(fallbackSettings().language).toBe("zh-CN");
     expect(fallbackSettings().onboardingCompleted).toBe(false);
     expect(fallbackScan().sessionsFound).toBeGreaterThan(0);

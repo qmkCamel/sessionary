@@ -23,7 +23,7 @@ let settings: AppSettings = {
     { source: "codex", enabled: true, paths: ["~/.codex/sessions", "~/.codex/archived_sessions"] },
     { source: "claude", enabled: true, paths: ["~/.claude/projects", "~/.claude"] }
   ],
-  projectRoots: ["/Users/edge/side/sessionary", "/Users/edge/side/marker"]
+  projectRoots: ["/Users/alex/work/sessionary", "/Users/alex/work/marker"]
 };
 
 let sessions: SessionRecord[] = [
@@ -32,8 +32,8 @@ let sessions: SessionRecord[] = [
     source: "codex",
     sourceSessionId: "019e407b-sessionary",
     projectName: "sessionary",
-    projectPath: "/Users/edge/side/sessionary",
-    cwd: "/Users/edge/side/sessionary",
+    projectPath: "/Users/alex/work/sessionary",
+    cwd: "/Users/alex/work/sessionary",
     startedAt: `${fallbackDate}T09:18:00+08:00`,
     endedAt: `${fallbackDate}T10:42:00+08:00`,
     durationSeconds: 5040,
@@ -68,8 +68,8 @@ let sessions: SessionRecord[] = [
     source: "claude",
     sourceSessionId: "claude-marker-ios-v1",
     projectName: "marker",
-    projectPath: "/Users/edge/side/marker",
-    cwd: "/Users/edge/side/marker",
+    projectPath: "/Users/alex/work/marker",
+    cwd: "/Users/alex/work/marker",
     startedAt: `${fallbackDate}T10:05:00+08:00`,
     endedAt: `${fallbackDate}T11:10:00+08:00`,
     durationSeconds: 3900,
@@ -104,8 +104,8 @@ let sessions: SessionRecord[] = [
     source: "codex",
     sourceSessionId: "peoplelens-storage-pass",
     projectName: "PeopleLens",
-    projectPath: "/Users/edge/side/PeopleLens",
-    cwd: "/Users/edge/side/PeopleLens",
+    projectPath: "/Users/alex/work/peoplelens",
+    cwd: "/Users/alex/work/peoplelens",
     startedAt: `${fallbackDate}T13:20:00+08:00`,
     endedAt: `${fallbackDate}T14:06:00+08:00`,
     durationSeconds: 2760,

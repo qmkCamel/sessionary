@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest a workflow or product improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Workflow problem
+      description: Describe the job Sessionary should help with.
+      placeholder: I want to understand when ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the product behavior, UI, parser, or report change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Local-first and privacy impact
+      description: Note whether the feature reads new local data or adds network behavior.
+      placeholder: This reads only local ... / This would require ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am interested in helping design or implement this with an OpenSpec change.
