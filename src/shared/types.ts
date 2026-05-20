@@ -1,0 +1,123 @@
+export type SessionSource = "codex" | "claude";
+
+export type SessionStatus =
+  | "unknown"
+  | "useful"
+  | "needs_review"
+  | "needs_repair"
+  | "repaired"
+  | "failed"
+  | "discarded";
+
+export type TimeFieldState = "estimated" | "manual";
+
+export interface SessionRecord {
+  id: string;
+  source: SessionSource;
+  sourceSessionId: string;
+  projectName: string;
+  projectPath: string;
+  cwd: string;
+  startedAt: string;
+  endedAt: string | null;
+  durationSeconds: number;
+  userMessageCount: number;
+  assistantMessageCount: number;
+  toolCallCount: number;
+  tokenCount: number | null;
+  costAmount: number | null;
+  status: SessionStatus;
+  statusUpdatedAt: string | null;
+  note: string;
+  confidence: number;
+  changedFiles: string[];
+  promptingSeconds: number;
+  waitingSeconds: number;
+  reviewSeconds: number;
+  repairSeconds: number;
+  timeFields: Record<"prompting" | "waiting" | "review" | "repair", TimeFieldState>;
+  summary: string;
+  sourceFile: string;
+  gitBranch: string | null;
+  gitDirty: boolean;
+}
+
+export interface ProjectSummary {
+  name: string;
+  path: string;
+  sessionCount: number;
+  startedAt: string;
+  endedAt: string | null;
+  activeSeconds: number;
+  sources: SessionSource[];
+  isParallel: boolean;
+  gitBranch: string | null;
+  gitDirty: boolean;
+}
+
+export interface OverlapInterval {
+  startedAt: string;
+  endedAt: string;
+  seconds: number;
+  sessionIds: string[];
+  projectNames: string[];
+}
+
+export interface DayMetrics {
+  date: string;
+  projectCount: number;
+  sessionCount: number;
+  aiWaitingSecondsEstimated: number;
+  promptingSecondsEstimated: number;
+  reviewSecondsEstimated: number;
+  repairSecondsEstimated: number;
+  parallelSeconds: number;
+  maxConcurrentSessions: number;
+  maxConcurrentProjects: number;
+  unknownCount: number;
+  needsReviewCount: number;
+  needsRepairCount: number;
+  generatedAt: string;
+}
+
+export interface DayLedger {
+  metrics: DayMetrics;
+  projects: ProjectSummary[];
+  sessions: SessionRecord[];
+  overlaps: OverlapInterval[];
+  sessionOverlaps: OverlapInterval[];
+  sourceStatus: SourceStatus[];
+}
+
+export interface SourceStatus {
+  source: SessionSource;
+  enabled: boolean;
+  path: string;
+  filesScanned: number;
+  sessionsFound: number;
+  errors: number;
+  lastScanAt: string | null;
+}
+
+export interface ScanResult {
+  startedAt: string;
+  finishedAt: string;
+  filesScanned: number;
+  sessionsFound: number;
+  errors: number;
+  sourceStatus: SourceStatus[];
+}
+
+export interface ReportResult {
+  markdown: string;
+  exportedPath?: string;
+}
+
+export interface SessionPatch {
+  status?: SessionStatus;
+  note?: string;
+  promptingSeconds?: number;
+  waitingSeconds?: number;
+  reviewSeconds?: number;
+  repairSeconds?: number;
+}

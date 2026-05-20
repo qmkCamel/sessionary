@@ -1,0 +1,5 @@
+{"timestamp":"2026-05-19T01:00:00.000Z","type":"session_meta","payload":{"id":"codex-fixture-1","timestamp":"2026-05-19T01:00:00.000Z","cwd":"/Users/edge/work/sessionary","originator":"Codex Desktop"}}
+{"timestamp":"2026-05-19T01:01:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"Implement the Today dashboard and update src/App.tsx."}}
+{"timestamp":"2026-05-19T01:06:00.000Z","type":"response_item","payload":{"type":"function_call","name":"apply_patch","arguments":"*** Begin Patch\n*** Update File: src/App.tsx\n+export function App() {}\n*** End Patch"}}
+{"timestamp":"2026-05-19T01:10:00.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Implemented dashboard."}}
+{"timestamp":"2026-05-19T01:10:00.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":1234}}}}
