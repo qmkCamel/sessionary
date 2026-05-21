@@ -337,6 +337,52 @@ pub struct OverlapInterval {
     pub project_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParallelInsightKind {
+    ParallelPayoff,
+    ReviewBottleneck,
+    ContextSwitching,
+    LowParallelism,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InsightSeverity {
+    Info,
+    Warning,
+    Critical,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParallelInsight {
+    pub kind: ParallelInsightKind,
+    pub severity: InsightSeverity,
+    pub seconds: i64,
+    pub count: usize,
+    pub session_ids: Vec<String>,
+    pub project_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ParallelReviewSummary {
+    pub total_active_seconds: i64,
+    pub parallel_project_seconds: i64,
+    pub parallel_session_seconds: i64,
+    pub parallel_project_ratio: f64,
+    pub parallel_session_ratio: f64,
+    pub max_concurrent_sessions: usize,
+    pub max_concurrent_projects: usize,
+    pub ai_waiting_human_overlap_seconds: i64,
+    pub review_backlog_session_count: usize,
+    pub review_backlog_seconds: i64,
+    pub context_switch_count: usize,
+    pub short_context_switch_count: usize,
+    pub insights: Vec<ParallelInsight>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DayMetrics {
@@ -355,6 +401,11 @@ pub struct DayMetrics {
     pub needs_repair_value_count: usize,
     pub discarded_value_count: usize,
     pub parallel_seconds: i64,
+    pub parallel_session_seconds: i64,
+    pub parallel_project_ratio: f64,
+    pub ai_waiting_human_overlap_seconds: i64,
+    pub review_backlog_session_count: usize,
+    pub context_switch_count: usize,
     pub max_concurrent_sessions: usize,
     pub max_concurrent_projects: usize,
     pub unknown_count: usize,
@@ -371,6 +422,7 @@ pub struct DayLedger {
     pub sessions: Vec<SessionRecord>,
     pub overlaps: Vec<OverlapInterval>,
     pub session_overlaps: Vec<OverlapInterval>,
+    pub parallel_review: ParallelReviewSummary,
     pub source_status: Vec<SourceStatus>,
 }
 

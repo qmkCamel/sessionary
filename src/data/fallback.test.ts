@@ -18,6 +18,8 @@ describe("fallback data", () => {
     expect(ledger.metrics.date).toBe("2026-05-20");
     expect(ledger.metrics.sessionCount).toBe(ledger.sessions.length);
     expect(ledger.metrics.toolCallCount).toBeGreaterThan(0);
+    expect(ledger.metrics.parallelProjectRatio).toBeGreaterThan(0);
+    expect(ledger.parallelReview.insights.map((insight) => insight.kind)).toContain("review_bottleneck");
     expect(ledger.sessions[0].value.reasons.length).toBeGreaterThan(0);
     expect(ledger.projects.length).toBeGreaterThan(0);
     expect(ledger.sourceStatus.map((source) => source.source)).toEqual(["codex", "claude"]);
@@ -56,8 +58,10 @@ describe("fallback data", () => {
     expect(fallbackSettings().onboardingCompleted).toBe(false);
     expect(fallbackScan().sessionsFound).toBeGreaterThan(0);
     expect(fallbackReport("2026-05-20").markdown).toContain("# Daily Report - 2026-05-20");
+    expect(fallbackReport("2026-05-20").markdown).toContain("## Parallel Review");
     expect(fallbackReport("2026-05-20", "zh-CN").markdown).toContain("# 每日报告 - 2026-05-20");
     expect(fallbackWeeklyReport("2026-05-20").markdown).toContain("## Most Valuable Sessions");
+    expect(fallbackWeeklyReport("2026-05-20").markdown).toContain("## Parallel Review");
   });
 
   it("supports fallback repair timer flow", () => {

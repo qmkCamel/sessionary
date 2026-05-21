@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
-use std::collections::BTreeSet;
 
-use crate::analytics::build_day_ledger;
+use crate::analytics::{
+    build_day_ledger, build_parallel_review_summary, compute_overlaps, OverlapKind,
+};
 use crate::db;
 use crate::models::{ReportResult, SessionRecord, SessionStatus, SessionValueCategory};
 use crate::util::week_range;
@@ -68,6 +70,33 @@ fn total_human_seconds(sessions: &[SessionRecord]) -> i64 {
         .iter()
         .map(|session| session.prompting_seconds + session.review_seconds + session.repair_seconds)
         .sum()
+}
+
+fn percent(value: f64) -> String {
+    format!("{}%", (value * 100.0).round() as i64)
+}
+
+fn insight_line(insight: &crate::models::ParallelInsight) -> String {
+    match insight.kind {
+        crate::models::ParallelInsightKind::ParallelPayoff => format!(
+            "- Parallel payoff: {} of AI waiting overlapped with review/repair across {} interval(s).",
+            human_time(insight.seconds),
+            insight.count
+        ),
+        crate::models::ParallelInsightKind::ReviewBottleneck => format!(
+            "- Review bottleneck: {} session(s) have waited about {} for review/repair.",
+            insight.count,
+            human_time(insight.seconds)
+        ),
+        crate::models::ParallelInsightKind::ContextSwitching => format!(
+            "- Context switching: {} short cross-project switch(es) detected.",
+            insight.count
+        ),
+        crate::models::ParallelInsightKind::LowParallelism => format!(
+            "- Low parallelism: {} sessions ran mostly serially.",
+            insight.count
+        ),
+    }
 }
 
 pub fn markdown_for(date: &str) -> anyhow::Result<String> {
@@ -140,6 +169,24 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
             "- Parallel project time: {}",
             human_time(ledger.metrics.parallel_seconds)
         ),
+        format!(
+            "- Parallel project ratio estimated: {}",
+            percent(ledger.parallel_review.parallel_project_ratio)
+        ),
+        format!(
+            "- AI waiting / human review overlap estimated: {}",
+            human_time(ledger.parallel_review.ai_waiting_human_overlap_seconds)
+        ),
+        format!(
+            "- Review backlog estimated: {} session(s), {}",
+            ledger.parallel_review.review_backlog_session_count,
+            human_time(ledger.parallel_review.review_backlog_seconds)
+        ),
+        format!(
+            "- Context switches: {} total, {} short",
+            ledger.parallel_review.context_switch_count,
+            ledger.parallel_review.short_context_switch_count
+        ),
         String::new(),
         "## Useful Sessions".to_string(),
         String::new(),
@@ -175,7 +222,7 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
 
     lines.extend([
         String::new(),
-        "## Parallel Development Notes".to_string(),
+        "## Parallel Review".to_string(),
         String::new(),
     ]);
     if ledger.overlaps.is_empty() {
@@ -190,6 +237,11 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
                 human_time(overlap.seconds)
             )
         }));
+    }
+    if ledger.parallel_review.insights.is_empty() {
+        lines.push("- No parallel workflow issues detected beyond current estimates.".to_string());
+    } else {
+        lines.extend(ledger.parallel_review.insights.iter().map(insight_line));
     }
 
     lines.extend([
@@ -219,13 +271,29 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
     let (week_start, week_end, start_iso, end_iso) = week_range(date)?;
     let mut sessions = db::sessions_between(&start_iso, &end_iso)?;
     sessions.sort_by(|left, right| left.started_at.cmp(&right.started_at));
+    let (project_overlaps, parallel_seconds, max_project_sessions, max_projects) =
+        compute_overlaps(&sessions, &start_iso, &end_iso, OverlapKind::Projects)?;
+    let (session_overlaps, _, max_session_sessions, _) =
+        compute_overlaps(&sessions, &start_iso, &end_iso, OverlapKind::Sessions)?;
+    let parallel_review = build_parallel_review_summary(
+        &sessions,
+        &start_iso,
+        &end_iso,
+        &project_overlaps,
+        &session_overlaps,
+        max_project_sessions.max(max_session_sessions),
+        max_projects,
+    )?;
 
     let project_count = sessions
         .iter()
         .map(|session| session.project_path.clone())
         .collect::<BTreeSet<_>>()
         .len();
-    let prompting_seconds: i64 = sessions.iter().map(|session| session.prompting_seconds).sum();
+    let prompting_seconds: i64 = sessions
+        .iter()
+        .map(|session| session.prompting_seconds)
+        .sum();
     let waiting_seconds: i64 = sessions.iter().map(|session| session.waiting_seconds).sum();
     let review_seconds: i64 = sessions.iter().map(|session| session.review_seconds).sum();
     let repair_seconds: i64 = sessions.iter().map(|session| session.repair_seconds).sum();
@@ -289,13 +357,17 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
     } else if review_seconds + repair_seconds > waiting_seconds {
         "Review and repair time exceeded AI waiting time; the workflow is likely bottlenecked after sessions finish.".to_string()
     } else if repair_seconds > 0 {
-        "Repair exists but is not dominating the week yet; inspect needs repair sessions first.".to_string()
+        "Repair exists but is not dominating the week yet; inspect needs repair sessions first."
+            .to_string()
     } else {
         "Review and repair did not dominate this week based on current estimates.".to_string()
     };
 
     let mut lines = vec![
-        format!("# Sessionary Weekly Report - {} to {}", week_start, week_end),
+        format!(
+            "# Sessionary Weekly Report - {} to {}",
+            week_start, week_end
+        ),
         String::new(),
         "## Summary".to_string(),
         String::new(),
@@ -306,6 +378,7 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
         format!("- Review estimated: {}", human_time(review_seconds)),
         format!("- Repair estimated: {}", human_time(repair_seconds)),
         format!("- Human time estimated: {}", human_time(human_seconds)),
+        format!("- Parallel project time: {}", human_time(parallel_seconds)),
         format!("- Tool calls: {tool_call_count}"),
         format!("- Tokens: {token_count}"),
         format!("- Cost: ${cost_amount:.4}"),
@@ -336,8 +409,35 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
         "## Workflow Notes".to_string(),
         String::new(),
         format!("- {workflow_note}"),
-        String::new(),
     ]);
+    lines.extend([
+        String::new(),
+        "## Parallel Review".to_string(),
+        String::new(),
+        format!(
+            "- Parallel project ratio estimated: {}",
+            percent(parallel_review.parallel_project_ratio)
+        ),
+        format!(
+            "- AI waiting / human review overlap estimated: {}",
+            human_time(parallel_review.ai_waiting_human_overlap_seconds)
+        ),
+        format!(
+            "- Review backlog estimated: {} session(s), {}",
+            parallel_review.review_backlog_session_count,
+            human_time(parallel_review.review_backlog_seconds)
+        ),
+        format!(
+            "- Context switches: {} total, {} short",
+            parallel_review.context_switch_count, parallel_review.short_context_switch_count
+        ),
+    ]);
+    if parallel_review.insights.is_empty() {
+        lines.push("- No parallel workflow issues detected beyond current estimates.".to_string());
+    } else {
+        lines.extend(parallel_review.insights.iter().map(insight_line));
+    }
+    lines.push(String::new());
 
     Ok(lines.join("\n"))
 }
@@ -382,9 +482,7 @@ pub fn export_weekly_report(date: &str, markdown: &str) -> anyhow::Result<Report
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{
-        SessionSource, SessionStatus, SessionValue, TimeFields,
-    };
+    use crate::models::{SessionSource, SessionStatus, SessionValue, TimeFields};
 
     fn session(status: SessionStatus, cost: Option<f64>, repair_seconds: i64) -> SessionRecord {
         let mut record = SessionRecord {

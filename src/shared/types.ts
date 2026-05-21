@@ -96,6 +96,39 @@ export interface OverlapInterval {
   projectNames: string[];
 }
 
+export type ParallelInsightKind =
+  | "parallel_payoff"
+  | "review_bottleneck"
+  | "context_switching"
+  | "low_parallelism";
+
+export type InsightSeverity = "info" | "warning" | "critical";
+
+export interface ParallelInsight {
+  kind: ParallelInsightKind;
+  severity: InsightSeverity;
+  seconds: number;
+  count: number;
+  sessionIds: string[];
+  projectNames: string[];
+}
+
+export interface ParallelReviewSummary {
+  totalActiveSeconds: number;
+  parallelProjectSeconds: number;
+  parallelSessionSeconds: number;
+  parallelProjectRatio: number;
+  parallelSessionRatio: number;
+  maxConcurrentSessions: number;
+  maxConcurrentProjects: number;
+  aiWaitingHumanOverlapSeconds: number;
+  reviewBacklogSessionCount: number;
+  reviewBacklogSeconds: number;
+  contextSwitchCount: number;
+  shortContextSwitchCount: number;
+  insights: ParallelInsight[];
+}
+
 export interface DayMetrics {
   date: string;
   projectCount: number;
@@ -112,6 +145,11 @@ export interface DayMetrics {
   needsRepairValueCount: number;
   discardedValueCount: number;
   parallelSeconds: number;
+  parallelSessionSeconds: number;
+  parallelProjectRatio: number;
+  aiWaitingHumanOverlapSeconds: number;
+  reviewBacklogSessionCount: number;
+  contextSwitchCount: number;
   maxConcurrentSessions: number;
   maxConcurrentProjects: number;
   unknownCount: number;
@@ -126,6 +164,7 @@ export interface DayLedger {
   sessions: SessionRecord[];
   overlaps: OverlapInterval[];
   sessionOverlaps: OverlapInterval[];
+  parallelReview: ParallelReviewSummary;
   sourceStatus: SourceStatus[];
 }
 

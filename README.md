@@ -8,9 +8,9 @@ Sessionary turns scattered local AI coding logs into a daily ledger: what you
 worked on, which sessions ran, where work overlapped, and which sessions still
 need review, repair, or follow-up.
 
-> Status: v0.2 local MVP. The app now covers local session value review,
-> human-time correction, daily reports, and weekly value reports. Packaged
-> releases, signing, auto-update, and team features are not ready yet.
+> Status: v0.3 local MVP. The app now covers local session value review,
+> human-time correction, daily/weekly reports, and parallel workflow review.
+> Packaged releases, signing, auto-update, and team features are not ready yet.
 
 ## Screenshots
 
@@ -29,6 +29,8 @@ need review, repair, or follow-up.
 - Shows project timelines, session overlap, and parallel work.
 - Classifies sessions by local value signals such as status, file hints, tool
   calls, token use, cost, and human repair time.
+- Reviews whether parallel work actually helped, including overlap, review
+  backlog, and context-switching signals.
 - Lets you annotate session status, notes, review time, and repair time,
   including lightweight review and repair timers.
 - Generates editable daily and weekly reports that can be copied or exported

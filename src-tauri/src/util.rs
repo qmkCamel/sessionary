@@ -69,8 +69,8 @@ pub fn day_range(date: &str) -> anyhow::Result<(String, String)> {
 
 pub fn week_range(date: &str) -> anyhow::Result<(String, String, String, String)> {
     let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d")?;
-    let start_date = parsed
-        - chrono::Duration::days(parsed.weekday().num_days_from_monday() as i64);
+    let start_date =
+        parsed - chrono::Duration::days(parsed.weekday().num_days_from_monday() as i64);
     let end_date = start_date + chrono::Duration::days(6);
     let start_label = start_date.format("%Y-%m-%d").to_string();
     let end_label = end_date.format("%Y-%m-%d").to_string();

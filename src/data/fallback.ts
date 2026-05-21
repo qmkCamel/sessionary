@@ -3,6 +3,8 @@ import type {
   DayLedger,
   DayMetrics,
   OverlapInterval,
+  ParallelInsight,
+  ParallelReviewSummary,
   ProjectSummary,
   ReportResult,
   ScanResult,
@@ -194,6 +196,10 @@ const overlaps: OverlapInterval[] = [
   }
 ];
 
+const sessionOverlaps: OverlapInterval[] = [
+  ...overlaps
+];
+
 function withValue(session: SessionRecord): SessionRecord {
   return {
     ...session,
@@ -201,7 +207,97 @@ function withValue(session: SessionRecord): SessionRecord {
   };
 }
 
-function metricsFor(date: string, currentSessions: SessionRecord[]): DayMetrics {
+function secondsBetween(start: string, end: string) {
+  return Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000));
+}
+
+function unionSeconds(currentSessions: SessionRecord[]) {
+  const intervals = currentSessions
+    .filter((session) => session.endedAt)
+    .map((session) => [new Date(session.startedAt).getTime(), new Date(session.endedAt ?? session.startedAt).getTime()] as const)
+    .sort((left, right) => left[0] - right[0]);
+  if (intervals.length === 0) return 0;
+  let total = 0;
+  let [start, end] = intervals[0];
+  for (const [nextStart, nextEnd] of intervals.slice(1)) {
+    if (nextStart <= end) {
+      end = Math.max(end, nextEnd);
+    } else {
+      total += Math.max(0, end - start);
+      start = nextStart;
+      end = nextEnd;
+    }
+  }
+  return Math.round((total + Math.max(0, end - start)) / 1000);
+}
+
+function parallelSummaryFor(currentSessions: SessionRecord[], projectOverlaps: OverlapInterval[], sessionOverlapList: OverlapInterval[]): ParallelReviewSummary {
+  const totalActiveSeconds = unionSeconds(currentSessions);
+  const parallelProjectSeconds = projectOverlaps.reduce((total, overlap) => total + overlap.seconds, 0);
+  const parallelSessionSeconds = sessionOverlapList.reduce((total, overlap) => total + overlap.seconds, 0);
+  const reviewBacklogSessions = currentSessions.filter((session) =>
+    session.endedAt && (session.status === "unknown" || session.status === "needs_review" || session.status === "needs_repair")
+  );
+  const generatedAt = `${currentSessions[0]?.startedAt.slice(0, 10) ?? fallbackDate}T15:00:00+08:00`;
+  const reviewBacklogSeconds = reviewBacklogSessions.reduce((total, session) => total + secondsBetween(session.endedAt ?? generatedAt, generatedAt), 0);
+  const ordered = [...currentSessions].sort((left, right) => left.startedAt.localeCompare(right.startedAt));
+  let contextSwitchCount = 0;
+  let shortContextSwitchCount = 0;
+  for (let index = 1; index < ordered.length; index += 1) {
+    const previous = ordered[index - 1];
+    const next = ordered[index];
+    if (previous.projectPath !== next.projectPath) {
+      contextSwitchCount += 1;
+      if (secondsBetween(previous.startedAt, next.startedAt) <= 20 * 60) shortContextSwitchCount += 1;
+    }
+  }
+  const insights: ParallelInsight[] = [
+    {
+      kind: "parallel_payoff",
+      severity: "info",
+      seconds: 720,
+      count: projectOverlaps.length,
+      sessionIds: projectOverlaps.flatMap((overlap) => overlap.sessionIds),
+      projectNames: [...new Set(projectOverlaps.flatMap((overlap) => overlap.projectNames))]
+    },
+    {
+      kind: "review_bottleneck",
+      severity: "warning",
+      seconds: reviewBacklogSeconds,
+      count: reviewBacklogSessions.length,
+      sessionIds: reviewBacklogSessions.map((session) => session.id),
+      projectNames: [...new Set(reviewBacklogSessions.map((session) => session.projectName))]
+    }
+  ];
+  if (shortContextSwitchCount >= 2) {
+    insights.push({
+      kind: "context_switching",
+      severity: "warning",
+      seconds: 0,
+      count: shortContextSwitchCount,
+      sessionIds: ordered.map((session) => session.id),
+      projectNames: [...new Set(ordered.map((session) => session.projectName))]
+    });
+  }
+
+  return {
+    totalActiveSeconds,
+    parallelProjectSeconds,
+    parallelSessionSeconds,
+    parallelProjectRatio: totalActiveSeconds === 0 ? 0 : parallelProjectSeconds / totalActiveSeconds,
+    parallelSessionRatio: totalActiveSeconds === 0 ? 0 : parallelSessionSeconds / totalActiveSeconds,
+    maxConcurrentSessions: 2,
+    maxConcurrentProjects: 2,
+    aiWaitingHumanOverlapSeconds: 720,
+    reviewBacklogSessionCount: reviewBacklogSessions.length,
+    reviewBacklogSeconds,
+    contextSwitchCount,
+    shortContextSwitchCount,
+    insights
+  };
+}
+
+function metricsFor(date: string, currentSessions: SessionRecord[], parallelReview: ParallelReviewSummary): DayMetrics {
   return {
     date,
     projectCount: new Set(currentSessions.map((session) => session.projectPath)).size,
@@ -217,7 +313,12 @@ function metricsFor(date: string, currentSessions: SessionRecord[]): DayMetrics 
     lowValueCount: currentSessions.filter((session) => session.value.category === "low_value").length,
     needsRepairValueCount: currentSessions.filter((session) => session.value.category === "needs_human_repair").length,
     discardedValueCount: currentSessions.filter((session) => session.value.category === "discarded").length,
-    parallelSeconds: overlaps.reduce((total, overlap) => total + overlap.seconds, 0),
+    parallelSeconds: parallelReview.parallelProjectSeconds,
+    parallelSessionSeconds: parallelReview.parallelSessionSeconds,
+    parallelProjectRatio: parallelReview.parallelProjectRatio,
+    aiWaitingHumanOverlapSeconds: parallelReview.aiWaitingHumanOverlapSeconds,
+    reviewBacklogSessionCount: parallelReview.reviewBacklogSessionCount,
+    contextSwitchCount: parallelReview.contextSwitchCount,
     maxConcurrentSessions: 2,
     maxConcurrentProjects: 2,
     unknownCount: currentSessions.filter((session) => session.status === "unknown").length,
@@ -236,21 +337,25 @@ export function fallbackLedger(date = fallbackDate): DayLedger {
     reviewStartedAt: session.reviewStartedAt?.replace(fallbackDate, date) ?? null,
     repairStartedAt: session.repairStartedAt?.replace(fallbackDate, date) ?? null
   })).map(withValue);
+  const datedOverlaps = clone(overlaps).map((overlap) => ({
+    ...overlap,
+    startedAt: overlap.startedAt.replace(fallbackDate, date),
+    endedAt: overlap.endedAt.replace(fallbackDate, date)
+  }));
+  const datedSessionOverlaps = clone(sessionOverlaps).map((overlap) => ({
+    ...overlap,
+    startedAt: overlap.startedAt.replace(fallbackDate, date),
+    endedAt: overlap.endedAt.replace(fallbackDate, date)
+  }));
+  const parallelReview = parallelSummaryFor(currentSessions, datedOverlaps, datedSessionOverlaps);
 
   return {
-    metrics: metricsFor(date, currentSessions),
+    metrics: metricsFor(date, currentSessions, parallelReview),
     projects: projectSummaries(currentSessions),
     sessions: currentSessions,
-    overlaps: clone(overlaps).map((overlap) => ({
-      ...overlap,
-      startedAt: overlap.startedAt.replace(fallbackDate, date),
-      endedAt: overlap.endedAt.replace(fallbackDate, date)
-    })),
-    sessionOverlaps: clone(overlaps).map((overlap) => ({
-      ...overlap,
-      startedAt: overlap.startedAt.replace(fallbackDate, date),
-      endedAt: overlap.endedAt.replace(fallbackDate, date)
-    })),
+    overlaps: datedOverlaps,
+    sessionOverlaps: datedSessionOverlaps,
+    parallelReview,
     sourceStatus: sourceStatusFor(currentSessions)
   };
 }
@@ -341,10 +446,20 @@ export function fallbackReport(date = fallbackDate, locale: Locale = "en"): Repo
       `${t("report.fallback.sessions")}: ${ledger.metrics.sessionCount}`,
       `${t("report.fallback.projects")}: ${ledger.metrics.projectCount}`,
       `${t("report.fallback.parallelWork")}: ${Math.round(ledger.metrics.parallelSeconds / 60)}m`,
+      `Parallel project ratio estimated: ${Math.round(ledger.parallelReview.parallelProjectRatio * 100)}%`,
+      `AI waiting / human review overlap estimated: ${Math.round(ledger.parallelReview.aiWaitingHumanOverlapSeconds / 60)}m`,
+      `Review backlog estimated: ${ledger.parallelReview.reviewBacklogSessionCount} session(s), ${Math.round(ledger.parallelReview.reviewBacklogSeconds / 60)}m`,
+      `Context switches: ${ledger.parallelReview.contextSwitchCount} total, ${ledger.parallelReview.shortContextSwitchCount} short`,
       `Tool calls: ${ledger.metrics.toolCallCount}`,
       `Tokens: ${ledger.metrics.tokenCount}`,
       `Cost: $${ledger.metrics.costAmount.toFixed(4)}`,
       `Value mix: ${ledger.metrics.highValueCount} high, ${ledger.metrics.lowValueCount} low, ${ledger.metrics.needsRepairValueCount} repair, ${ledger.metrics.discardedValueCount} discarded`,
+      "",
+      "## Parallel Review",
+      `- Parallel project ratio estimated: ${Math.round(ledger.parallelReview.parallelProjectRatio * 100)}%`,
+      `- AI waiting / human review overlap estimated: ${Math.round(ledger.parallelReview.aiWaitingHumanOverlapSeconds / 60)}m`,
+      `- Review backlog estimated: ${ledger.parallelReview.reviewBacklogSessionCount} session(s), ${Math.round(ledger.parallelReview.reviewBacklogSeconds / 60)}m`,
+      `- Context switches: ${ledger.parallelReview.contextSwitchCount} total, ${ledger.parallelReview.shortContextSwitchCount} short`,
       "",
       `## ${t("report.fallback.projects")}`,
       ...topProjects,
@@ -407,7 +522,13 @@ export function fallbackWeeklyReport(date = fallbackDate, locale: Locale = "en")
       ...(waste.length > 0 ? waste.map(line) : ["- No obvious waste sessions based on current marks."]),
       "",
       "## Workflow Notes",
-      "- Review and repair are estimated until you confirm them in session detail."
+      "- Review and repair are estimated until you confirm them in session detail.",
+      "",
+      "## Parallel Review",
+      `- Parallel project ratio estimated: ${Math.round(ledger.parallelReview.parallelProjectRatio * 100)}%`,
+      `- AI waiting / human review overlap estimated: ${Math.round(ledger.parallelReview.aiWaitingHumanOverlapSeconds / 60)}m`,
+      `- Review backlog estimated: ${ledger.parallelReview.reviewBacklogSessionCount} session(s), ${Math.round(ledger.parallelReview.reviewBacklogSeconds / 60)}m`,
+      `- Context switches: ${ledger.parallelReview.contextSwitchCount} total, ${ledger.parallelReview.shortContextSwitchCount} short`
     ].join("\n")
   };
 }

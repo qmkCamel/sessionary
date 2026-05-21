@@ -39,7 +39,18 @@ import {
   startRepair
 } from "./api";
 import { createTranslator, resolveLocale, type LanguageSetting, type Translator, type TranslationKey } from "./i18n";
-import type { AppSettings, DayLedger, OverlapInterval, SessionPatch, SessionRecord, SessionStatus, SessionValueCategory, SessionValueReason } from "./shared/types";
+import type {
+  AppSettings,
+  DayLedger,
+  OverlapInterval,
+  ParallelInsight,
+  ParallelInsightKind,
+  SessionPatch,
+  SessionRecord,
+  SessionStatus,
+  SessionValueCategory,
+  SessionValueReason
+} from "./shared/types";
 
 type View = "today" | "inbox" | "timeline" | "report" | "settings";
 type Filter = "all" | SessionStatus;
@@ -95,6 +106,13 @@ const timeFieldKeys = {
   repair: "time.repair"
 } satisfies Record<"prompting" | "waiting" | "review" | "repair", TranslationKey>;
 
+const parallelInsightKeys: Record<ParallelInsightKind, TranslationKey> = {
+  parallel_payoff: "parallelInsight.parallel_payoff",
+  review_bottleneck: "parallelInsight.review_bottleneck",
+  context_switching: "parallelInsight.context_switching",
+  low_parallelism: "parallelInsight.low_parallelism"
+};
+
 const navItems: Array<{ id: View; labelKey: TranslationKey; icon: typeof LayoutDashboard }> = [
   { id: "today", labelKey: "nav.today", icon: LayoutDashboard },
   { id: "inbox", labelKey: "nav.inbox", icon: Inbox },
@@ -123,6 +141,10 @@ function compactNumber(value: number): string {
 function costLabel(value: number | null | undefined): string {
   if (value == null) return "n/a";
   return `$${value.toFixed(value >= 10 ? 2 : 4)}`;
+}
+
+function percentLabel(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 function timeLabel(iso: string | null, t?: Translator): string {
@@ -171,6 +193,117 @@ function ValueChip({ session, showScore = false }: { session: SessionRecord; sho
       {t(valueCategoryKeys[session.value.category])}
       {showScore ? <small>{session.value.score}</small> : null}
     </span>
+  );
+}
+
+function insightDetail(insight: ParallelInsight, t: Translator): string {
+  if (insight.kind === "parallel_payoff") {
+    return `${secondsLabel(insight.seconds)} ${t("parallelInsight.waitingReviewOverlap")}`;
+  }
+  if (insight.kind === "review_bottleneck") {
+    return `${insight.count} ${t("common.sessions")} · ${secondsLabel(insight.seconds)} ${t("metric.estimated")}`;
+  }
+  if (insight.kind === "context_switching") {
+    return `${insight.count} ${t("parallelInsight.shortSwitches")}`;
+  }
+  return `${insight.count} ${t("common.sessions")}`;
+}
+
+function ParallelInsightCard({ insight }: { insight: ParallelInsight }) {
+  const t = useTranslation();
+  return (
+    <div className={`insight-card ${insight.severity}`}>
+      <strong>{t(parallelInsightKeys[insight.kind])}</strong>
+      <span>{insightDetail(insight, t)}</span>
+      {insight.projectNames.length > 0 && <small>{insight.projectNames.join(" + ")}</small>}
+    </div>
+  );
+}
+
+function ParallelReviewStrip({ ledger }: { ledger: DayLedger }) {
+  const t = useTranslation();
+  return (
+    <section className="parallel-strip">
+      <Metric label={t("parallelReview.parallelRatio")} value={percentLabel(ledger.parallelReview.parallelProjectRatio)} hint={t("metric.estimated")} />
+      <Metric label={t("parallelReview.waitingReviewOverlap")} value={secondsLabel(ledger.parallelReview.aiWaitingHumanOverlapSeconds)} hint={t("metric.estimated")} />
+      <Metric label={t("parallelReview.reviewBacklog")} value={ledger.parallelReview.reviewBacklogSessionCount} hint={secondsLabel(ledger.parallelReview.reviewBacklogSeconds)} />
+      <Metric label={t("parallelReview.shortSwitches")} value={ledger.parallelReview.shortContextSwitchCount} hint={`${ledger.parallelReview.contextSwitchCount} ${t("parallelReview.totalSwitches")}`} />
+    </section>
+  );
+}
+
+function ParallelReviewPanel({
+  ledger,
+  onOverlapSelect
+}: {
+  ledger: DayLedger;
+  onOverlapSelect: (overlap: OverlapInterval) => void;
+}) {
+  const t = useTranslation();
+  return (
+    <section className="panel parallel-review-panel">
+      <div className="panel-header">
+        <h2>{t("parallelReview.title")}</h2>
+        <span>{t("metric.estimated")}</span>
+      </div>
+      <dl className="parallel-review-stats">
+        <div>
+          <dt>{t("parallelReview.parallelRatio")}</dt>
+          <dd>{percentLabel(ledger.parallelReview.parallelProjectRatio)}</dd>
+        </div>
+        <div>
+          <dt>{t("parallelReview.sessionParallel")}</dt>
+          <dd>{secondsLabel(ledger.parallelReview.parallelSessionSeconds)}</dd>
+        </div>
+        <div>
+          <dt>{t("parallelReview.waitingReviewOverlap")}</dt>
+          <dd>{secondsLabel(ledger.parallelReview.aiWaitingHumanOverlapSeconds)}</dd>
+        </div>
+        <div>
+          <dt>{t("parallelReview.reviewBacklog")}</dt>
+          <dd>{ledger.parallelReview.reviewBacklogSessionCount}</dd>
+        </div>
+        <div>
+          <dt>{t("metric.maxAgents")}</dt>
+          <dd>{ledger.parallelReview.maxConcurrentSessions}</dd>
+        </div>
+        <div>
+          <dt>{t("parallelReview.shortSwitches")}</dt>
+          <dd>{ledger.parallelReview.shortContextSwitchCount}</dd>
+        </div>
+      </dl>
+      <div className="insight-list">
+        {ledger.parallelReview.insights.length === 0 ? (
+          <EmptyState title={t("parallelReview.noInsights")} />
+        ) : (
+          ledger.parallelReview.insights.map((insight) => (
+            <ParallelInsightCard key={`${insight.kind}-${insight.count}-${insight.seconds}`} insight={insight} />
+          ))
+        )}
+      </div>
+      <div className="panel-header compact">
+        <h2>{t("parallelReview.sessionOverlaps")}</h2>
+        <span>{ledger.sessionOverlaps.length}</span>
+      </div>
+      <div className="overlap-list compact-overlap-list">
+        {ledger.sessionOverlaps.length === 0 ? (
+          <EmptyState title={t("parallelReview.noSessionOverlaps")} />
+        ) : (
+          ledger.sessionOverlaps.slice(0, 5).map((overlap) => (
+            <button
+              key={`${overlap.startedAt}-${overlap.endedAt}`}
+              onClick={() => onOverlapSelect(overlap)}
+            >
+              <span>
+                <strong>{overlap.sessionIds.length} {t("common.sessions")}</strong>
+                <small>{timeLabel(overlap.startedAt, t)}-{timeLabel(overlap.endedAt, t)}</small>
+              </span>
+              <em>{secondsLabel(overlap.seconds)}</em>
+            </button>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -424,9 +557,18 @@ function TimelineCanvas({
         <span>{timeLabel(new Date(bounds[1]).toISOString(), t)}</span>
       </div>
       <div className="timeline-body">
+        {ledger.sessionOverlaps.map((overlap) => (
+          <button
+            key={`session-${overlap.startedAt}-${overlap.endedAt}`}
+            className={`session-overlap-band ${overlapsEqual(selectedOverlap, overlap) ? "selected" : ""}`}
+            style={positionFor(overlap.startedAt, overlap.endedAt, bounds)}
+            title={`${overlap.sessionIds.length} ${t("common.sessions")} · ${secondsLabel(overlap.seconds)}`}
+            onClick={() => onOverlapSelect?.(overlap)}
+          />
+        ))}
         {ledger.overlaps.map((overlap) => (
           <button
-            key={`${overlap.startedAt}-${overlap.endedAt}`}
+            key={`project-${overlap.startedAt}-${overlap.endedAt}`}
             className={`overlap-band ${overlapsEqual(selectedOverlap, overlap) ? "selected" : ""}`}
             style={positionFor(overlap.startedAt, overlap.endedAt, bounds)}
             title={`${overlap.projectNames.join(", ")} · ${secondsLabel(overlap.seconds)}`}
@@ -528,6 +670,16 @@ function TodayView({
         <Metric label={t("metric.tokens")} value={compactNumber(ledger.metrics.tokenCount)} />
         <Metric label={t("metric.cost")} value={costLabel(ledger.metrics.costAmount)} />
       </div>
+
+      <ParallelReviewStrip ledger={ledger} />
+
+      {ledger.parallelReview.insights.length > 0 && (
+        <section className="insight-grid" aria-label={t("parallelReview.insights")}>
+          {ledger.parallelReview.insights.slice(0, 3).map((insight) => (
+            <ParallelInsightCard key={`${insight.kind}-${insight.count}-${insight.seconds}`} insight={insight} />
+          ))}
+        </section>
+      )}
 
       <div className="today-primary-grid">
         <section className="panel review-queue-panel">
@@ -836,6 +988,8 @@ function ProjectTimelineView({
         {inspector && <aside className="page-inspector timeline-inspector">{inspector}</aside>}
       </div>
 
+      <ParallelReviewPanel ledger={ledger} onOverlapSelect={onOverlapSelect} />
+
       <section className="panel overlap-summary-panel">
         <div className="panel-header">
           <h2>{t("projectTimeline.overlapSummary")}</h2>
@@ -969,6 +1123,31 @@ function ReportOverview({ ledger }: { ledger: DayLedger }) {
           <div>
             <dt>{t("value.needs_human_repair")}</dt>
             <dd>{ledger.metrics.needsRepairValueCount}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("parallelReview.title")}</h2>
+          <span>{t("metric.estimated")}</span>
+        </div>
+        <dl className="overview-list">
+          <div>
+            <dt>{t("parallelReview.parallelRatio")}</dt>
+            <dd>{percentLabel(ledger.parallelReview.parallelProjectRatio)}</dd>
+          </div>
+          <div>
+            <dt>{t("parallelReview.waitingReviewOverlap")}</dt>
+            <dd>{secondsLabel(ledger.parallelReview.aiWaitingHumanOverlapSeconds)}</dd>
+          </div>
+          <div>
+            <dt>{t("parallelReview.reviewBacklog")}</dt>
+            <dd>{ledger.parallelReview.reviewBacklogSessionCount}</dd>
+          </div>
+          <div>
+            <dt>{t("parallelReview.shortSwitches")}</dt>
+            <dd>{ledger.parallelReview.shortContextSwitchCount}</dd>
           </div>
         </dl>
       </section>

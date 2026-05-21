@@ -1,11 +1,12 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::db;
 use crate::ingest;
 use crate::models::{
-    DayLedger, DayMetrics, OverlapInterval, ProjectSummary, SessionRecord, SessionSource,
-    SessionStatus, SessionValueCategory,
+    DayLedger, DayMetrics, InsightSeverity, OverlapInterval, ParallelInsight, ParallelInsightKind,
+    ParallelReviewSummary, ProjectSummary, SessionRecord, SessionSource, SessionStatus,
+    SessionValueCategory,
 };
 use crate::util::{day_range, parse_utc};
 
@@ -20,6 +21,13 @@ struct Event {
     time: DateTime<Utc>,
     is_start: bool,
     session: SessionRecord,
+}
+
+#[derive(Debug, Clone)]
+struct TimelineInterval {
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    session_id: String,
 }
 
 fn clip_time(value: &str, min: DateTime<Utc>, max: DateTime<Utc>) -> anyhow::Result<DateTime<Utc>> {
@@ -42,6 +50,71 @@ fn merge_intervals(intervals: Vec<OverlapInterval>) -> Vec<OverlapInterval> {
         merged.push(interval);
     }
     merged
+}
+
+fn clipped_session_interval(
+    session: &SessionRecord,
+    min: DateTime<Utc>,
+    max: DateTime<Utc>,
+) -> anyhow::Result<Option<TimelineInterval>> {
+    let Some(ended_at) = &session.ended_at else {
+        return Ok(None);
+    };
+    let start = clip_time(&session.started_at, min, max)?;
+    let end = clip_time(ended_at, min, max)?;
+    if end <= start {
+        return Ok(None);
+    }
+    Ok(Some(TimelineInterval {
+        start,
+        end,
+        session_id: session.id.clone(),
+    }))
+}
+
+fn union_seconds(mut intervals: Vec<TimelineInterval>) -> i64 {
+    if intervals.is_empty() {
+        return 0;
+    }
+    intervals.sort_by(|left, right| left.start.cmp(&right.start).then(left.end.cmp(&right.end)));
+    let mut total = 0_i64;
+    let mut current_start = intervals[0].start;
+    let mut current_end = intervals[0].end;
+
+    for interval in intervals.into_iter().skip(1) {
+        if interval.start <= current_end {
+            current_end = current_end.max(interval.end);
+        } else {
+            total += (current_end - current_start).num_seconds().max(0);
+            current_start = interval.start;
+            current_end = interval.end;
+        }
+    }
+
+    total + (current_end - current_start).num_seconds().max(0)
+}
+
+fn interval_overlap_seconds(left: &TimelineInterval, right: &TimelineInterval) -> i64 {
+    let start = left.start.max(right.start);
+    let end = left.end.min(right.end);
+    (end - start).num_seconds().max(0)
+}
+
+fn overlap_collection_seconds(
+    left: &[TimelineInterval],
+    right: &[TimelineInterval],
+    exclude_same_session: bool,
+) -> i64 {
+    let mut total = 0_i64;
+    for left_interval in left {
+        for right_interval in right {
+            if exclude_same_session && left_interval.session_id == right_interval.session_id {
+                continue;
+            }
+            total += interval_overlap_seconds(left_interval, right_interval);
+        }
+    }
+    total
 }
 
 pub fn compute_overlaps(
@@ -190,6 +263,212 @@ fn build_projects(sessions: &[SessionRecord], overlaps: &[OverlapInterval]) -> V
         .collect()
 }
 
+pub fn build_parallel_review_summary(
+    sessions: &[SessionRecord],
+    range_start: &str,
+    range_end: &str,
+    project_overlaps: &[OverlapInterval],
+    session_overlaps: &[OverlapInterval],
+    max_concurrent_sessions: usize,
+    max_concurrent_projects: usize,
+) -> anyhow::Result<ParallelReviewSummary> {
+    let range_start_dt = parse_utc(range_start)?;
+    let range_end_dt = parse_utc(range_end)?;
+    let active_intervals = sessions
+        .iter()
+        .filter_map(|session| {
+            clipped_session_interval(session, range_start_dt, range_end_dt)
+                .ok()
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    let total_active_seconds = union_seconds(active_intervals.clone());
+    let parallel_project_seconds = project_overlaps.iter().map(|overlap| overlap.seconds).sum();
+    let parallel_session_seconds = session_overlaps.iter().map(|overlap| overlap.seconds).sum();
+    let ratio = |seconds: i64| {
+        if total_active_seconds <= 0 {
+            0.0
+        } else {
+            seconds as f64 / total_active_seconds as f64
+        }
+    };
+
+    let waiting_intervals = sessions
+        .iter()
+        .filter_map(|session| {
+            let Some(ended_at) = &session.ended_at else {
+                return None;
+            };
+            let session_start = parse_utc(&session.started_at).ok()?;
+            let waiting_start = session_start + Duration::seconds(session.prompting_seconds.max(0));
+            let waiting_end = parse_utc(ended_at).ok()?;
+            let start = waiting_start.max(range_start_dt);
+            let end = waiting_end.min(range_end_dt);
+            (end > start).then(|| TimelineInterval {
+                start,
+                end,
+                session_id: session.id.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let human_intervals = sessions
+        .iter()
+        .filter_map(|session| {
+            let Some(ended_at) = &session.ended_at else {
+                return None;
+            };
+            let human_seconds = session.review_seconds.max(0) + session.repair_seconds.max(0);
+            if human_seconds <= 0 {
+                return None;
+            }
+            let start = parse_utc(ended_at).ok()?.max(range_start_dt);
+            let end =
+                (parse_utc(ended_at).ok()? + Duration::seconds(human_seconds)).min(range_end_dt);
+            (end > start).then(|| TimelineInterval {
+                start,
+                end,
+                session_id: session.id.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let ai_waiting_human_overlap_seconds =
+        overlap_collection_seconds(&waiting_intervals, &human_intervals, true);
+
+    let now = Utc::now().min(range_end_dt);
+    let eval_time = now.max(range_start_dt);
+    let backlog_sessions = sessions
+        .iter()
+        .filter(|session| {
+            matches!(
+                session.status,
+                SessionStatus::Unknown | SessionStatus::NeedsReview | SessionStatus::NeedsRepair
+            ) && session.ended_at.is_some()
+        })
+        .collect::<Vec<_>>();
+    let review_backlog_seconds = backlog_sessions
+        .iter()
+        .filter_map(|session| session.ended_at.as_deref())
+        .filter_map(|ended_at| parse_utc(ended_at).ok())
+        .map(|ended_at| (eval_time - ended_at).num_seconds().max(0))
+        .sum();
+
+    let mut ordered_sessions = sessions
+        .iter()
+        .filter_map(|session| {
+            parse_utc(&session.started_at)
+                .ok()
+                .map(|start| (start, session))
+        })
+        .collect::<Vec<_>>();
+    ordered_sessions.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut context_switch_count = 0_usize;
+    let mut short_context_switch_count = 0_usize;
+    let mut switch_project_names = BTreeSet::new();
+    let mut switch_session_ids = Vec::new();
+    for pair in ordered_sessions.windows(2) {
+        let (previous_start, previous) = pair[0];
+        let (next_start, next) = pair[1];
+        if previous.project_path != next.project_path {
+            context_switch_count += 1;
+            switch_project_names.insert(previous.project_name.clone());
+            switch_project_names.insert(next.project_name.clone());
+            switch_session_ids.push(previous.id.clone());
+            switch_session_ids.push(next.id.clone());
+            if (next_start - previous_start).num_minutes() <= 20 {
+                short_context_switch_count += 1;
+            }
+        }
+    }
+    switch_session_ids.sort();
+    switch_session_ids.dedup();
+
+    let mut insights = Vec::new();
+    if parallel_project_seconds > 0 && ai_waiting_human_overlap_seconds > 0 {
+        insights.push(ParallelInsight {
+            kind: ParallelInsightKind::ParallelPayoff,
+            severity: InsightSeverity::Info,
+            seconds: ai_waiting_human_overlap_seconds,
+            count: project_overlaps.len(),
+            session_ids: project_overlaps
+                .iter()
+                .flat_map(|overlap| overlap.session_ids.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            project_names: project_overlaps
+                .iter()
+                .flat_map(|overlap| overlap.project_names.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        });
+    }
+    if backlog_sessions.len() >= 2 || review_backlog_seconds >= 2 * 60 * 60 {
+        insights.push(ParallelInsight {
+            kind: ParallelInsightKind::ReviewBottleneck,
+            severity: if review_backlog_seconds >= 4 * 60 * 60 {
+                InsightSeverity::Critical
+            } else {
+                InsightSeverity::Warning
+            },
+            seconds: review_backlog_seconds,
+            count: backlog_sessions.len(),
+            session_ids: backlog_sessions
+                .iter()
+                .map(|session| session.id.clone())
+                .collect(),
+            project_names: backlog_sessions
+                .iter()
+                .map(|session| session.project_name.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        });
+    }
+    if short_context_switch_count >= 2 {
+        insights.push(ParallelInsight {
+            kind: ParallelInsightKind::ContextSwitching,
+            severity: InsightSeverity::Warning,
+            seconds: 0,
+            count: short_context_switch_count,
+            session_ids: switch_session_ids,
+            project_names: switch_project_names.into_iter().collect(),
+        });
+    }
+    if sessions.len() > 1 && max_concurrent_sessions <= 1 {
+        insights.push(ParallelInsight {
+            kind: ParallelInsightKind::LowParallelism,
+            severity: InsightSeverity::Info,
+            seconds: 0,
+            count: sessions.len(),
+            session_ids: sessions.iter().map(|session| session.id.clone()).collect(),
+            project_names: sessions
+                .iter()
+                .map(|session| session.project_name.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+        });
+    }
+
+    Ok(ParallelReviewSummary {
+        total_active_seconds,
+        parallel_project_seconds,
+        parallel_session_seconds,
+        parallel_project_ratio: ratio(parallel_project_seconds),
+        parallel_session_ratio: ratio(parallel_session_seconds),
+        max_concurrent_sessions,
+        max_concurrent_projects,
+        ai_waiting_human_overlap_seconds,
+        review_backlog_session_count: backlog_sessions.len(),
+        review_backlog_seconds,
+        context_switch_count,
+        short_context_switch_count,
+        insights,
+    })
+}
+
 pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
     db::init()?;
     let (start, end) = day_range(date)?;
@@ -200,6 +479,15 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
         compute_overlaps(&sessions, &start, &end, OverlapKind::Sessions)?;
     let projects = build_projects(&sessions, &project_overlaps);
     let source_status = ingest::source_status()?;
+    let parallel_review = build_parallel_review_summary(
+        &sessions,
+        &start,
+        &end,
+        &project_overlaps,
+        &session_overlaps,
+        max_project_sessions.max(max_session_sessions),
+        max_projects,
+    )?;
 
     Ok(DayLedger {
         metrics: DayMetrics {
@@ -235,15 +523,18 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
                 .count(),
             needs_repair_value_count: sessions
                 .iter()
-                .filter(|session| {
-                    session.value.category == SessionValueCategory::NeedsHumanRepair
-                })
+                .filter(|session| session.value.category == SessionValueCategory::NeedsHumanRepair)
                 .count(),
             discarded_value_count: sessions
                 .iter()
                 .filter(|session| session.value.category == SessionValueCategory::Discarded)
                 .count(),
             parallel_seconds,
+            parallel_session_seconds: parallel_review.parallel_session_seconds,
+            parallel_project_ratio: parallel_review.parallel_project_ratio,
+            ai_waiting_human_overlap_seconds: parallel_review.ai_waiting_human_overlap_seconds,
+            review_backlog_session_count: parallel_review.review_backlog_session_count,
+            context_switch_count: parallel_review.context_switch_count,
             max_concurrent_sessions: max_project_sessions.max(max_session_sessions),
             max_concurrent_projects: max_projects,
             unknown_count: sessions
@@ -264,6 +555,7 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
         sessions,
         overlaps: project_overlaps,
         session_overlaps,
+        parallel_review,
         source_status,
     })
 }
@@ -335,5 +627,57 @@ mod tests {
         assert_eq!(intervals.len(), 1);
         assert_eq!(seconds, 600);
         assert_eq!(projects, 2);
+    }
+
+    #[test]
+    fn builds_parallel_review_summary_with_backlog_and_overlap() {
+        let sessions = vec![
+            session(
+                "a",
+                "alpha",
+                "2026-05-19T01:00:00.000Z",
+                "2026-05-19T01:30:00.000Z",
+            ),
+            session(
+                "b",
+                "beta",
+                "2026-05-19T01:10:00.000Z",
+                "2026-05-19T01:40:00.000Z",
+            ),
+        ];
+        let (project_overlaps, _, max_session_projects, max_projects) = compute_overlaps(
+            &sessions,
+            "2026-05-19T00:00:00.000Z",
+            "2026-05-20T00:00:00.000Z",
+            OverlapKind::Projects,
+        )
+        .expect("project overlap computes");
+        let (session_overlaps, _, max_sessions, _) = compute_overlaps(
+            &sessions,
+            "2026-05-19T00:00:00.000Z",
+            "2026-05-20T00:00:00.000Z",
+            OverlapKind::Sessions,
+        )
+        .expect("session overlap computes");
+        let summary = build_parallel_review_summary(
+            &sessions,
+            "2026-05-19T00:00:00.000Z",
+            "2026-05-20T00:00:00.000Z",
+            &project_overlaps,
+            &session_overlaps,
+            max_sessions.max(max_session_projects),
+            max_projects,
+        )
+        .expect("summary computes");
+
+        assert_eq!(summary.parallel_project_seconds, 1200);
+        assert_eq!(summary.parallel_session_seconds, 1200);
+        assert_eq!(summary.max_concurrent_sessions, 2);
+        assert_eq!(summary.review_backlog_session_count, 2);
+        assert!(summary.parallel_project_ratio > 0.0);
+        assert!(summary
+            .insights
+            .iter()
+            .any(|insight| insight.kind == ParallelInsightKind::ReviewBottleneck));
     }
 }
