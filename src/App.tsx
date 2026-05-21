@@ -24,23 +24,28 @@ import {
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   exportReport,
+  exportWeeklyReport,
   finishReview,
+  finishRepair,
   generateReport,
+  generateWeeklyReport,
   getDay,
   getSettings,
   latestDate,
   patchSession,
   saveSettings,
   scanSources,
-  startReview
+  startReview,
+  startRepair
 } from "./api";
 import { createTranslator, resolveLocale, type LanguageSetting, type Translator, type TranslationKey } from "./i18n";
-import type { AppSettings, DayLedger, OverlapInterval, SessionPatch, SessionRecord, SessionStatus } from "./shared/types";
+import type { AppSettings, DayLedger, OverlapInterval, SessionPatch, SessionRecord, SessionStatus, SessionValueCategory, SessionValueReason } from "./shared/types";
 
 type View = "today" | "inbox" | "timeline" | "report" | "settings";
 type Filter = "all" | SessionStatus;
 type ZoomMinutes = 15 | 30 | 60;
 type RangeSelection = { startedAt: string; endedAt: string };
+type ReportMode = "daily" | "weekly";
 
 const statusKeys: Record<SessionStatus, TranslationKey> = {
   unknown: "status.unknown",
@@ -56,6 +61,39 @@ const sourceLabels = {
   codex: "Codex",
   claude: "Claude"
 };
+
+const valueCategoryKeys: Record<SessionValueCategory, TranslationKey> = {
+  high_value: "value.high_value",
+  mixed_value: "value.mixed_value",
+  low_value: "value.low_value",
+  needs_human_repair: "value.needs_human_repair",
+  discarded: "value.discarded",
+  unreviewed: "value.unreviewed"
+};
+
+const valueReasonKeys: Record<SessionValueReason, TranslationKey> = {
+  marked_useful: "valueReason.marked_useful",
+  marked_repaired: "valueReason.marked_repaired",
+  has_file_hints: "valueReason.has_file_hints",
+  has_tool_calls: "valueReason.has_tool_calls",
+  has_token_usage: "valueReason.has_token_usage",
+  low_cost: "valueReason.low_cost",
+  high_cost: "valueReason.high_cost",
+  high_human_time: "valueReason.high_human_time",
+  high_repair_time: "valueReason.high_repair_time",
+  needs_review: "valueReason.needs_review",
+  needs_repair: "valueReason.needs_repair",
+  discarded: "valueReason.discarded",
+  failed: "valueReason.failed",
+  no_output_signals: "valueReason.no_output_signals"
+};
+
+const timeFieldKeys = {
+  prompting: "time.prompting",
+  waiting: "time.waiting",
+  review: "time.review",
+  repair: "time.repair"
+} satisfies Record<"prompting" | "waiting" | "review" | "repair", TranslationKey>;
 
 const navItems: Array<{ id: View; labelKey: TranslationKey; icon: typeof LayoutDashboard }> = [
   { id: "today", labelKey: "nav.today", icon: LayoutDashboard },
@@ -76,6 +114,15 @@ function secondsLabel(seconds: number): string {
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes}m`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function compactNumber(value: number): string {
+  return new Intl.NumberFormat(undefined, { notation: value >= 10_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value);
+}
+
+function costLabel(value: number | null | undefined): string {
+  if (value == null) return "n/a";
+  return `$${value.toFixed(value >= 10 ? 2 : 4)}`;
 }
 
 function timeLabel(iso: string | null, t?: Translator): string {
@@ -115,6 +162,16 @@ function statusIcon(status: SessionStatus) {
   if (status === "failed" || status === "discarded") return <X size={14} />;
   if (status === "needs_review") return <AlertCircle size={14} />;
   return <CircleDot size={14} />;
+}
+
+function ValueChip({ session, showScore = false }: { session: SessionRecord; showScore?: boolean }) {
+  const t = useTranslation();
+  return (
+    <span className={`value-chip ${session.value.category}`}>
+      {t(valueCategoryKeys[session.value.category])}
+      {showScore ? <small>{session.value.score}</small> : null}
+    </span>
+  );
 }
 
 function overlapsEqual(left?: OverlapInterval, right?: OverlapInterval) {
@@ -466,6 +523,10 @@ function TodayView({
         <Metric label={t("metric.repair")} value={ledger.metrics.needsRepairCount} />
         <Metric label={t("metric.parallel")} value={secondsLabel(ledger.metrics.parallelSeconds)} />
         <Metric label={t("today.humanTime")} value={secondsLabel(humanTimeEstimateSeconds(ledger))} hint={t("metric.estimated")} />
+        <Metric label={t("metric.highValue")} value={ledger.metrics.highValueCount} />
+        <Metric label={t("metric.tools")} value={compactNumber(ledger.metrics.toolCallCount)} />
+        <Metric label={t("metric.tokens")} value={compactNumber(ledger.metrics.tokenCount)} />
+        <Metric label={t("metric.cost")} value={costLabel(ledger.metrics.costAmount)} />
       </div>
 
       <div className="today-primary-grid">
@@ -669,6 +730,9 @@ function InboxView({
                     <span>{session.assistantMessageCount} {t("inbox.replies")}</span>
                     <span>{session.toolCallCount} {t("common.tools")}</span>
                     <span>{secondsLabel(session.durationSeconds)}</span>
+                    <span>{compactNumber(session.tokenCount ?? 0)} {t("metric.tokens")}</span>
+                    <span>{costLabel(session.costAmount)}</span>
+                    <span>{session.changedFiles.length} {t("detail.files")}</span>
                   </div>
                   <div className="quick-actions" onClick={(event) => event.stopPropagation()}>
                     <button title={t("status.useful")} onClick={() => void markStatus(session, "useful")}>
@@ -684,10 +748,13 @@ function InboxView({
                       <X size={16} />
                     </button>
                   </div>
-                  <span className={`status-chip ${session.status}`}>
-                    {statusIcon(session.status)}
-                    {t(statusKeys[session.status])}
-                  </span>
+                  <div className="session-badges">
+                    <ValueChip session={session} />
+                    <span className={`status-chip ${session.status}`}>
+                      {statusIcon(session.status)}
+                      {t(statusKeys[session.status])}
+                    </span>
+                  </div>
                 </article>
               ))
             )}
@@ -832,6 +899,14 @@ function ReportOverview({ ledger }: { ledger: DayLedger }) {
             <dt>{t("status.needs_repair")}</dt>
             <dd>{ledger.metrics.needsRepairCount}</dd>
           </div>
+          <div>
+            <dt>{t("metric.highValue")}</dt>
+            <dd>{ledger.metrics.highValueCount}</dd>
+          </div>
+          <div>
+            <dt>{t("metric.lowValue")}</dt>
+            <dd>{ledger.metrics.lowValueCount}</dd>
+          </div>
         </dl>
       </section>
 
@@ -874,6 +949,30 @@ function ReportOverview({ ledger }: { ledger: DayLedger }) {
         </div>
       </section>
 
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("detail.activity")}</h2>
+        </div>
+        <dl className="overview-list">
+          <div>
+            <dt>{t("metric.tools")}</dt>
+            <dd>{compactNumber(ledger.metrics.toolCallCount)}</dd>
+          </div>
+          <div>
+            <dt>{t("metric.tokens")}</dt>
+            <dd>{compactNumber(ledger.metrics.tokenCount)}</dd>
+          </div>
+          <div>
+            <dt>{t("metric.cost")}</dt>
+            <dd>{costLabel(ledger.metrics.costAmount)}</dd>
+          </div>
+          <div>
+            <dt>{t("value.needs_human_repair")}</dt>
+            <dd>{ledger.metrics.needsRepairValueCount}</dd>
+          </div>
+        </dl>
+      </section>
+
       <section className="panel privacy-panel">
         <div className="panel-header">
           <h2>{t("common.localOnly")}</h2>
@@ -886,16 +985,20 @@ function ReportOverview({ ledger }: { ledger: DayLedger }) {
 
 function ReportView({
   ledger,
+  mode,
   markdown,
   exportedPath,
+  onModeChange,
   onGenerate,
   onChange,
   onCopy,
   onExport
 }: {
   ledger: DayLedger;
+  mode: ReportMode;
   markdown: string;
   exportedPath?: string;
+  onModeChange: (mode: ReportMode) => void;
   onGenerate: () => void;
   onChange: (value: string) => void;
   onCopy: () => void;
@@ -909,16 +1012,25 @@ function ReportView({
           <p>{ledger.metrics.date}</p>
           <h1>{t("nav.report")}</h1>
         </div>
-        <div className="toolbar">
-          <button title={t("report.generate")} onClick={onGenerate}>
-            <RefreshCw size={16} />
-          </button>
-          <button title={t("report.copy")} onClick={onCopy}>
-            <Clipboard size={16} />
-          </button>
-          <button title={t("report.export")} onClick={onExport}>
-            <Download size={16} />
-          </button>
+        <div className="report-actions">
+          <div className="segmented-control">
+            {(["daily", "weekly"] as ReportMode[]).map((item) => (
+              <button key={item} className={mode === item ? "active" : ""} onClick={() => onModeChange(item)}>
+                {t(item === "daily" ? "report.daily" : "report.weekly")}
+              </button>
+            ))}
+          </div>
+          <div className="toolbar">
+            <button title={t("report.generate")} onClick={onGenerate}>
+              <RefreshCw size={16} />
+            </button>
+            <button title={t("report.copy")} onClick={onCopy}>
+              <Clipboard size={16} />
+            </button>
+            <button title={t("report.export")} onClick={onExport}>
+              <Download size={16} />
+            </button>
+          </div>
         </div>
       </div>
       <div className="report-layout">
@@ -1085,7 +1197,9 @@ function DetailPanel({
   onPatch,
   onSelect,
   onStartReview,
-  onFinishReview
+  onFinishReview,
+  onStartRepair,
+  onFinishRepair
 }: {
   session?: SessionRecord;
   ledger: DayLedger;
@@ -1095,6 +1209,8 @@ function DetailPanel({
   onSelect: (session: SessionRecord) => void;
   onStartReview: (session: SessionRecord) => void;
   onFinishReview: (session: SessionRecord, status?: SessionStatus) => void;
+  onStartRepair: (session: SessionRecord) => void;
+  onFinishRepair: (session: SessionRecord, status?: SessionStatus) => void;
 }) {
   const t = useTranslation();
   const [note, setNote] = useState("");
@@ -1217,6 +1333,19 @@ function DetailPanel({
       </div>
 
       <section className="detail-section">
+        <h3>{t("detail.value")}</h3>
+        <div className="value-summary">
+          <ValueChip session={session} showScore />
+          <span>{session.value.score}/100</span>
+        </div>
+        <div className="file-list">
+          {session.value.reasons.map((reason) => (
+            <span key={reason}>{t(valueReasonKeys[reason])}</span>
+          ))}
+        </div>
+      </section>
+
+      <section className="detail-section">
         <h3>{t("detail.reviewFlow")}</h3>
         <div className="review-actions">
           <button className={session.reviewStartedAt ? "active" : ""} onClick={() => onStartReview(session)}>
@@ -1236,13 +1365,32 @@ function DetailPanel({
       </section>
 
       <section className="detail-section">
+        <h3>{t("detail.repairFlow")}</h3>
+        <div className="review-actions">
+          <button className={session.repairStartedAt ? "active" : ""} onClick={() => onStartRepair(session)}>
+            <Play size={15} />
+            {t("detail.startRepair")}
+          </button>
+          <button onClick={() => onFinishRepair(session, "repaired")}>
+            <Square size={15} />
+            {t("detail.markRepaired")}
+          </button>
+          <button onClick={() => onPatch(session, { status: "needs_repair" })}>
+            <Wrench size={15} />
+            {t("detail.needsRepair")}
+          </button>
+        </div>
+        {session.repairStartedAt && <small>{t("detail.repairRunningSince")} {timeLabel(session.repairStartedAt, t)}</small>}
+      </section>
+
+      <section className="detail-section">
         <h3>{t("detail.time")}</h3>
         <div className="time-grid">
           {(["prompting", "waiting", "review", "repair"] as const).map((field) => (
             <label key={field}>
               <span>
-                {field}
-                <small>{session.timeFields[field]}</small>
+                {t(timeFieldKeys[field])}
+                <small>{session.timeFields[field] === "manual" ? t("common.manual") : t("metric.estimated")}</small>
               </span>
               <input
                 type="number"
@@ -1288,6 +1436,10 @@ function DetailPanel({
             <dd>{session.tokenCount?.toLocaleString() ?? t("common.notAvailable")}</dd>
           </div>
           <div>
+            <dt>{t("metric.tools")}</dt>
+            <dd>{session.toolCallCount}</dd>
+          </div>
+          <div>
             <dt>{t("detail.cost")}</dt>
             <dd>{session.costAmount == null ? "n/a" : `$${session.costAmount.toFixed(4)}`}</dd>
           </div>
@@ -1324,6 +1476,8 @@ export function App() {
   const [error, setError] = useState<string>();
   const [markdown, setMarkdown] = useState("");
   const [exportedPath, setExportedPath] = useState<string>();
+  const [reportMode, setReportMode] = useState<ReportMode>("daily");
+  const [renderedReportKey, setRenderedReportKey] = useState("");
   const [settingsState, setSettingsState] = useState<AppSettings | null>(null);
   const [zoomMinutes, setZoomMinutes] = useState<ZoomMinutes>(30);
   const [selectedOverlap, setSelectedOverlap] = useState<OverlapInterval>();
@@ -1390,14 +1544,8 @@ export function App() {
 
   const applyPatch = async (session: SessionRecord, patch: SessionPatch) => {
     const updated = await patchSession(session.id, patch);
-    setLedger((current) =>
-      current
-        ? {
-            ...current,
-            sessions: current.sessions.map((item) => (item.id === updated.id ? updated : item))
-          }
-        : current
-    );
+    const nextLedger = await getDay(date || ledger?.metrics.date);
+    setLedger(nextLedger);
     setSelectedId(updated.id);
     setSelectedOverlap(undefined);
     setSelectedRange(undefined);
@@ -1442,13 +1590,29 @@ export function App() {
 
   const runStartReview = async (session: SessionRecord) => {
     const updated = await startReview(session.id);
-    setLedger((current) => current ? { ...current, sessions: current.sessions.map((item) => item.id === updated.id ? updated : item) } : current);
+    const nextLedger = await getDay(date || ledger?.metrics.date);
+    setLedger(nextLedger);
     setSelectedId(updated.id);
   };
 
   const runFinishReview = async (session: SessionRecord, status: SessionStatus = "useful") => {
     const updated = await finishReview(session.id, status);
-    setLedger((current) => current ? { ...current, sessions: current.sessions.map((item) => item.id === updated.id ? updated : item) } : current);
+    const nextLedger = await getDay(date || ledger?.metrics.date);
+    setLedger(nextLedger);
+    setSelectedId(updated.id);
+  };
+
+  const runStartRepair = async (session: SessionRecord) => {
+    const updated = await startRepair(session.id);
+    const nextLedger = await getDay(date || ledger?.metrics.date);
+    setLedger(nextLedger);
+    setSelectedId(updated.id);
+  };
+
+  const runFinishRepair = async (session: SessionRecord, status: SessionStatus = "repaired") => {
+    const updated = await finishRepair(session.id, status);
+    const nextLedger = await getDay(date || ledger?.metrics.date);
+    setLedger(nextLedger);
     setSelectedId(updated.id);
   };
 
@@ -1459,14 +1623,19 @@ export function App() {
 
   const refreshReport = async () => {
     if (!ledger) return;
-    const result = await generateReport(ledger.metrics.date, locale);
+    const result =
+      reportMode === "weekly"
+        ? await generateWeeklyReport(ledger.metrics.date, locale)
+        : await generateReport(ledger.metrics.date, locale);
     setMarkdown(result.markdown);
     setExportedPath(result.exportedPath);
+    setRenderedReportKey(`${reportMode}:${ledger.metrics.date}`);
   };
 
   useEffect(() => {
-    if (view === "report" && ledger && markdown.length === 0) void refreshReport();
-  }, [view, ledger]);
+    const reportKey = ledger ? `${reportMode}:${ledger.metrics.date}` : "";
+    if (view === "report" && ledger && renderedReportKey !== reportKey) void refreshReport();
+  }, [view, ledger?.metrics.date, reportMode, renderedReportKey]);
 
   if (settingsState && !settingsState.onboardingCompleted) {
     return (
@@ -1508,6 +1677,8 @@ export function App() {
       onSelect={selectSession}
       onStartReview={(session) => void runStartReview(session)}
       onFinishReview={(session, status) => void runFinishReview(session, status)}
+      onStartRepair={(session) => void runStartRepair(session)}
+      onFinishRepair={(session, status) => void runFinishRepair(session, status)}
     />
   );
 
@@ -1569,13 +1740,21 @@ export function App() {
           {view === "report" && (
             <ReportView
               ledger={ledger}
+              mode={reportMode}
               markdown={markdown}
               exportedPath={exportedPath}
+              onModeChange={(mode) => {
+                setReportMode(mode);
+                setExportedPath(undefined);
+              }}
               onGenerate={refreshReport}
               onChange={setMarkdown}
               onCopy={() => void navigator.clipboard.writeText(markdown)}
               onExport={async () => {
-                const result = await exportReport(ledger.metrics.date, markdown, locale);
+                const result =
+                  reportMode === "weekly"
+                    ? await exportWeeklyReport(ledger.metrics.date, markdown, locale)
+                    : await exportReport(ledger.metrics.date, markdown, locale);
                 setExportedPath(result.exportedPath);
               }}
             />

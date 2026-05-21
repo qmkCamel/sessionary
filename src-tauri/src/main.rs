@@ -56,6 +56,20 @@ fn finish_review(id: String, status: Option<SessionStatus>) -> Result<SessionRec
 }
 
 #[tauri::command]
+fn start_repair(id: String) -> Result<SessionRecord, String> {
+    db::start_repair(&id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "session not found".to_string())
+}
+
+#[tauri::command]
+fn finish_repair(id: String, status: Option<SessionStatus>) -> Result<SessionRecord, String> {
+    db::finish_repair(&id, status)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "session not found".to_string())
+}
+
+#[tauri::command]
 fn get_settings() -> Result<AppSettings, String> {
     db::get_settings().map_err(|error| error.to_string())
 }
@@ -75,6 +89,16 @@ fn export_report(date: String, markdown: String) -> Result<ReportResult, String>
     report::export_report(&date, &markdown).map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn generate_weekly_report(date: String) -> Result<ReportResult, String> {
+    report::build_weekly_report(&date).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn export_weekly_report(date: String, markdown: String) -> Result<ReportResult, String> {
+    report::export_weekly_report(&date, &markdown).map_err(|error| error.to_string())
+}
+
 fn main() {
     db::init().expect("failed to initialize Sessionary database");
     tauri::Builder::default()
@@ -85,10 +109,14 @@ fn main() {
             update_session,
             start_review,
             finish_review,
+            start_repair,
+            finish_repair,
             get_settings,
             save_settings,
             generate_report,
-            export_report
+            export_report,
+            generate_weekly_report,
+            export_weekly_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sessionary");

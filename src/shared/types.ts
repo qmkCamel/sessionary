@@ -11,6 +11,36 @@ export type SessionStatus =
 
 export type TimeFieldState = "estimated" | "manual";
 
+export type SessionValueCategory =
+  | "high_value"
+  | "mixed_value"
+  | "low_value"
+  | "needs_human_repair"
+  | "discarded"
+  | "unreviewed";
+
+export type SessionValueReason =
+  | "marked_useful"
+  | "marked_repaired"
+  | "has_file_hints"
+  | "has_tool_calls"
+  | "has_token_usage"
+  | "low_cost"
+  | "high_cost"
+  | "high_human_time"
+  | "high_repair_time"
+  | "needs_review"
+  | "needs_repair"
+  | "discarded"
+  | "failed"
+  | "no_output_signals";
+
+export interface SessionValue {
+  category: SessionValueCategory;
+  score: number;
+  reasons: SessionValueReason[];
+}
+
 export interface SessionRecord {
   id: string;
   source: SessionSource;
@@ -36,7 +66,9 @@ export interface SessionRecord {
   reviewSeconds: number;
   repairSeconds: number;
   reviewStartedAt: string | null;
+  repairStartedAt: string | null;
   timeFields: Record<"prompting" | "waiting" | "review" | "repair", TimeFieldState>;
+  value: SessionValue;
   summary: string;
   sourceFile: string;
   gitBranch: string | null;
@@ -72,6 +104,13 @@ export interface DayMetrics {
   promptingSecondsEstimated: number;
   reviewSecondsEstimated: number;
   repairSecondsEstimated: number;
+  toolCallCount: number;
+  tokenCount: number;
+  costAmount: number;
+  highValueCount: number;
+  lowValueCount: number;
+  needsRepairValueCount: number;
+  discardedValueCount: number;
   parallelSeconds: number;
   maxConcurrentSessions: number;
   maxConcurrentProjects: number;

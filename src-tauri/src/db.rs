@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::models::{
     AppSettings, LanguageSetting, SessionPatch, SessionRecord, SessionSource, SessionStatus,
-    SourceConfig, SourceStatus, TimeFieldState,
+    SessionValue, SourceConfig, SourceStatus, TimeFieldState,
 };
 use crate::util::local_date;
 
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   review_seconds INTEGER NOT NULL DEFAULT 0,
   repair_seconds INTEGER NOT NULL DEFAULT 0,
   review_started_at TEXT,
+  repair_started_at TEXT,
   time_fields_json TEXT NOT NULL DEFAULT '{"prompting":"estimated","waiting":"estimated","review":"estimated","repair":"estimated"}',
   summary TEXT NOT NULL DEFAULT '',
   source_file TEXT NOT NULL DEFAULT '',
@@ -99,6 +100,7 @@ pub fn init() -> anyhow::Result<()> {
     let conn = Connection::open(db_path()?)?;
     conn.execute_batch(SCHEMA)?;
     ensure_column(&conn, "sessions", "review_started_at", "TEXT")?;
+    ensure_column(&conn, "sessions", "repair_started_at", "TEXT")?;
     ensure_default_source_configs(&conn)?;
     Ok(())
 }
@@ -173,7 +175,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     let changed_files_json: String = row.get("changed_files_json")?;
     let time_fields_json: String = row.get("time_fields_json")?;
 
-    Ok(SessionRecord {
+    let mut session = SessionRecord {
         id: row.get("id")?,
         source: SessionSource::try_from(source_text.as_str()).unwrap_or(SessionSource::Codex),
         source_session_id: row.get("source_session_id")?,
@@ -198,12 +200,16 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         review_seconds: row.get("review_seconds")?,
         repair_seconds: row.get("repair_seconds")?,
         review_started_at: row.get("review_started_at")?,
+        repair_started_at: row.get("repair_started_at")?,
         time_fields: parse_json(time_fields_json),
+        value: SessionValue::default(),
         summary: row.get("summary")?,
         source_file: row.get("source_file")?,
         git_branch: row.get("git_branch")?,
         git_dirty: row.get::<_, i64>("git_dirty")? == 1,
-    })
+    };
+    session.value = SessionValue::for_session(&session);
+    Ok(session)
 }
 
 pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
@@ -220,11 +226,11 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
               id, source, source_session_id, project_name, project_path, cwd, started_at, ended_at,
               duration_seconds, user_message_count, assistant_message_count, tool_call_count,
               token_count, cost_amount, status, status_updated_at, note, confidence, changed_files_json,
-              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, time_fields_json,
+              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, repair_started_at, time_fields_json,
               summary, source_file, git_branch, git_dirty
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
             )
             ON CONFLICT(id) DO UPDATE SET
               source=excluded.source,
@@ -280,6 +286,7 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
                 session.review_seconds,
                 session.repair_seconds,
                 session.review_started_at,
+                session.repair_started_at,
                 serde_json::to_string(&session.time_fields)?,
                 session.summary,
                 session.source_file,
@@ -431,6 +438,69 @@ pub fn finish_review(
         "#,
         params![
             review_seconds,
+            serde_json::to_string(&time_fields)?,
+            next_status.as_str(),
+            finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            id
+        ],
+    )?;
+    get_session(id)
+}
+
+pub fn start_repair(id: &str) -> anyhow::Result<Option<SessionRecord>> {
+    let Some(_current) = get_session(id)? else {
+        return Ok(None);
+    };
+    let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let conn = connection()?;
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET repair_started_at=?1,
+            status=?2,
+            status_updated_at=?1,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE id=?3
+        "#,
+        params![started_at, SessionStatus::NeedsRepair.as_str(), id],
+    )?;
+    get_session(id)
+}
+
+pub fn finish_repair(
+    id: &str,
+    status: Option<SessionStatus>,
+) -> anyhow::Result<Option<SessionRecord>> {
+    let Some(current) = get_session(id)? else {
+        return Ok(None);
+    };
+    let finished_at = chrono::Utc::now();
+    let mut repair_seconds = current.repair_seconds;
+    if let Some(started_at) = current.repair_started_at.as_deref() {
+        if let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) {
+            let elapsed = (finished_at - started.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0);
+            repair_seconds = repair_seconds.saturating_add(elapsed);
+        }
+    }
+    let mut time_fields = current.time_fields;
+    time_fields.repair = TimeFieldState::Manual;
+    let next_status = status.unwrap_or(SessionStatus::Repaired);
+    let conn = connection()?;
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET repair_started_at=NULL,
+            repair_seconds=?1,
+            time_fields_json=?2,
+            status=?3,
+            status_updated_at=?4,
+            updated_at=CURRENT_TIMESTAMP
+        WHERE id=?5
+        "#,
+        params![
+            repair_seconds,
             serde_json::to_string(&time_fields)?,
             next_status.as_str(),
             finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),

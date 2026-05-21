@@ -1,4 +1,4 @@
-use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, SecondsFormat, Utc};
 use sha1::{Digest, Sha1};
 
 pub fn stable_id(input: &str) -> String {
@@ -67,8 +67,35 @@ pub fn day_range(date: &str) -> anyhow::Result<(String, String)> {
     ))
 }
 
+pub fn week_range(date: &str) -> anyhow::Result<(String, String, String, String)> {
+    let parsed = NaiveDate::parse_from_str(date, "%Y-%m-%d")?;
+    let start_date = parsed
+        - chrono::Duration::days(parsed.weekday().num_days_from_monday() as i64);
+    let end_date = start_date + chrono::Duration::days(6);
+    let start_label = start_date.format("%Y-%m-%d").to_string();
+    let end_label = end_date.format("%Y-%m-%d").to_string();
+    let (start_iso, _) = day_range(&start_label)?;
+    let (_, end_iso) = day_range(&end_label)?;
+    Ok((start_label, end_label, start_iso, end_iso))
+}
+
 pub fn local_date(iso: &str) -> Option<String> {
     let offset = FixedOffset::east_opt(8 * 3600)?;
     let dt = parse_utc(iso).ok()?;
     Some(dt.with_timezone(&offset).format("%Y-%m-%d").to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn week_range_uses_monday_to_sunday() {
+        let (start, end, start_iso, end_iso) = week_range("2026-05-20").expect("week range");
+
+        assert_eq!(start, "2026-05-18");
+        assert_eq!(end, "2026-05-24");
+        assert!(start_iso.starts_with("2026-05-17T16:00:00"));
+        assert!(end_iso.starts_with("2026-05-24T16:00:00"));
+    }
 }

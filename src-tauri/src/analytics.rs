@@ -5,7 +5,7 @@ use crate::db;
 use crate::ingest;
 use crate::models::{
     DayLedger, DayMetrics, OverlapInterval, ProjectSummary, SessionRecord, SessionSource,
-    SessionStatus,
+    SessionStatus, SessionValueCategory,
 };
 use crate::util::{day_range, parse_utc};
 
@@ -216,6 +216,33 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
                 .sum(),
             review_seconds_estimated: sessions.iter().map(|session| session.review_seconds).sum(),
             repair_seconds_estimated: sessions.iter().map(|session| session.repair_seconds).sum(),
+            tool_call_count: sessions.iter().map(|session| session.tool_call_count).sum(),
+            token_count: sessions
+                .iter()
+                .map(|session| session.token_count.unwrap_or_default())
+                .sum(),
+            cost_amount: sessions
+                .iter()
+                .map(|session| session.cost_amount.unwrap_or_default())
+                .sum(),
+            high_value_count: sessions
+                .iter()
+                .filter(|session| session.value.category == SessionValueCategory::HighValue)
+                .count(),
+            low_value_count: sessions
+                .iter()
+                .filter(|session| session.value.category == SessionValueCategory::LowValue)
+                .count(),
+            needs_repair_value_count: sessions
+                .iter()
+                .filter(|session| {
+                    session.value.category == SessionValueCategory::NeedsHumanRepair
+                })
+                .count(),
+            discarded_value_count: sessions
+                .iter()
+                .filter(|session| session.value.category == SessionValueCategory::Discarded)
+                .count(),
             parallel_seconds,
             max_concurrent_sessions: max_project_sessions.max(max_session_sessions),
             max_concurrent_projects: max_projects,
@@ -272,7 +299,9 @@ mod tests {
             review_seconds: 60,
             repair_seconds: 0,
             review_started_at: None,
+            repair_started_at: None,
             time_fields: TimeFields::default(),
+            value: Default::default(),
             summary: String::new(),
             source_file: String::new(),
             git_branch: None,

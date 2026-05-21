@@ -78,6 +78,67 @@ pub enum TimeFieldState {
     Manual,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionValueCategory {
+    HighValue,
+    MixedValue,
+    LowValue,
+    NeedsHumanRepair,
+    Discarded,
+    Unreviewed,
+}
+
+impl SessionValueCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SessionValueCategory::HighValue => "high_value",
+            SessionValueCategory::MixedValue => "mixed_value",
+            SessionValueCategory::LowValue => "low_value",
+            SessionValueCategory::NeedsHumanRepair => "needs_human_repair",
+            SessionValueCategory::Discarded => "discarded",
+            SessionValueCategory::Unreviewed => "unreviewed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionValueReason {
+    MarkedUseful,
+    MarkedRepaired,
+    HasFileHints,
+    HasToolCalls,
+    HasTokenUsage,
+    LowCost,
+    HighCost,
+    HighHumanTime,
+    HighRepairTime,
+    NeedsReview,
+    NeedsRepair,
+    Discarded,
+    Failed,
+    NoOutputSignals,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionValue {
+    pub category: SessionValueCategory,
+    pub score: i64,
+    pub reasons: Vec<SessionValueReason>,
+}
+
+impl Default for SessionValue {
+    fn default() -> Self {
+        Self {
+            category: SessionValueCategory::Unreviewed,
+            score: 50,
+            reasons: vec![SessionValueReason::NeedsReview],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeFields {
@@ -125,11 +186,119 @@ pub struct SessionRecord {
     pub review_seconds: i64,
     pub repair_seconds: i64,
     pub review_started_at: Option<String>,
+    pub repair_started_at: Option<String>,
     pub time_fields: TimeFields,
+    pub value: SessionValue,
     pub summary: String,
     pub source_file: String,
     pub git_branch: Option<String>,
     pub git_dirty: bool,
+}
+
+impl SessionValue {
+    pub fn for_session(session: &SessionRecord) -> Self {
+        let mut reasons = Vec::new();
+        let mut score = 45_i64;
+
+        match session.status {
+            SessionStatus::Discarded => {
+                return Self {
+                    category: SessionValueCategory::Discarded,
+                    score: 5,
+                    reasons: vec![SessionValueReason::Discarded],
+                };
+            }
+            SessionStatus::Failed => {
+                return Self {
+                    category: SessionValueCategory::Discarded,
+                    score: 10,
+                    reasons: vec![SessionValueReason::Failed],
+                };
+            }
+            SessionStatus::NeedsRepair => {
+                reasons.push(SessionValueReason::NeedsRepair);
+                score -= 12;
+            }
+            SessionStatus::NeedsReview | SessionStatus::Unknown => {
+                reasons.push(SessionValueReason::NeedsReview);
+                score -= 6;
+            }
+            SessionStatus::Useful => {
+                reasons.push(SessionValueReason::MarkedUseful);
+                score += 24;
+            }
+            SessionStatus::Repaired => {
+                reasons.push(SessionValueReason::MarkedRepaired);
+                score += 16;
+            }
+        }
+
+        let has_file_hints = !session.changed_files.is_empty();
+        let has_tool_calls = session.tool_call_count > 0;
+        let has_token_usage = session.token_count.unwrap_or_default() > 0;
+
+        if has_file_hints {
+            reasons.push(SessionValueReason::HasFileHints);
+            score += 14;
+        }
+        if has_tool_calls {
+            reasons.push(SessionValueReason::HasToolCalls);
+            score += (session.tool_call_count / 3).clamp(3, 12);
+        }
+        if has_token_usage {
+            reasons.push(SessionValueReason::HasTokenUsage);
+            score += 4;
+        }
+        if !has_file_hints && !has_tool_calls && !has_token_usage {
+            reasons.push(SessionValueReason::NoOutputSignals);
+            score -= 12;
+        }
+
+        if let Some(cost) = session.cost_amount {
+            if cost <= 1.0 {
+                reasons.push(SessionValueReason::LowCost);
+                score += 5;
+            } else if cost >= 5.0 {
+                reasons.push(SessionValueReason::HighCost);
+                score -= 18;
+            } else if cost >= 2.0 {
+                reasons.push(SessionValueReason::HighCost);
+                score -= 9;
+            }
+        }
+
+        let human_seconds =
+            session.prompting_seconds + session.review_seconds + session.repair_seconds;
+        let total_seconds = session.duration_seconds.max(1);
+        if human_seconds * 100 / total_seconds > 55 {
+            reasons.push(SessionValueReason::HighHumanTime);
+            score -= 10;
+        }
+        if session.repair_seconds > 0 {
+            reasons.push(SessionValueReason::HighRepairTime);
+            score -= (session.repair_seconds / 300).clamp(4, 16);
+        }
+
+        let score = score.clamp(0, 100);
+        let category = match session.status {
+            SessionStatus::NeedsRepair => SessionValueCategory::NeedsHumanRepair,
+            SessionStatus::Unknown | SessionStatus::NeedsReview => SessionValueCategory::Unreviewed,
+            SessionStatus::Useful | SessionStatus::Repaired if score >= 72 => {
+                SessionValueCategory::HighValue
+            }
+            SessionStatus::Useful | SessionStatus::Repaired if score >= 42 => {
+                SessionValueCategory::MixedValue
+            }
+            SessionStatus::Useful | SessionStatus::Repaired => SessionValueCategory::LowValue,
+            SessionStatus::Failed | SessionStatus::Discarded => SessionValueCategory::Discarded,
+        };
+
+        Self {
+            category,
+            score,
+            reasons,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -178,6 +347,13 @@ pub struct DayMetrics {
     pub prompting_seconds_estimated: i64,
     pub review_seconds_estimated: i64,
     pub repair_seconds_estimated: i64,
+    pub tool_call_count: i64,
+    pub token_count: i64,
+    pub cost_amount: f64,
+    pub high_value_count: usize,
+    pub low_value_count: usize,
+    pub needs_repair_value_count: usize,
+    pub discarded_value_count: usize,
     pub parallel_seconds: i64,
     pub max_concurrent_sessions: usize,
     pub max_concurrent_projects: usize,

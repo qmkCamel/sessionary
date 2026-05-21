@@ -586,7 +586,8 @@ button.project-table-row {
 
 .parallel-tag,
 .quiet-tag,
-.status-chip {
+.status-chip,
+.value-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -673,6 +674,42 @@ button.project-table-row {
   color: #84362d;
 }
 
+.value-chip {
+  border: 1px solid transparent;
+  font-weight: 700;
+}
+
+.value-chip small {
+  color: inherit;
+  opacity: 0.75;
+}
+
+.value-chip.high_value {
+  background: #dfeee4;
+  color: #28543d;
+}
+
+.value-chip.mixed_value {
+  background: #e1ecf6;
+  color: #274f7c;
+}
+
+.value-chip.low_value,
+.value-chip.needs_human_repair {
+  background: #f4e0bd;
+  color: #76460c;
+}
+
+.value-chip.discarded {
+  background: #f2dad5;
+  color: #84362d;
+}
+
+.value-chip.unreviewed {
+  background: #edf0eb;
+  color: #52615d;
+}
+
 .search-box {
   display: flex;
   align-items: center;
@@ -711,7 +748,7 @@ button.project-table-row {
 .inbox-card {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 14px;
   align-items: center;
   padding: 14px;
@@ -738,8 +775,8 @@ button.project-table-row {
 }
 
 .session-stats {
-  display: none;
-  grid-template-columns: repeat(2, auto);
+  display: grid;
+  grid-template-columns: repeat(3, auto);
   gap: 5px 10px;
   color: var(--muted);
   font-size: 12px;
@@ -748,6 +785,25 @@ button.project-table-row {
 .quick-actions {
   display: flex;
   gap: 4px;
+  justify-content: flex-end;
+}
+
+.session-stats {
+  grid-column: 1;
+}
+
+.quick-actions,
+.session-badges {
+  grid-column: 2;
+}
+
+.session-badges,
+.report-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .toolbar button,
@@ -839,6 +895,21 @@ button.project-table-row {
 .detail-section {
   display: grid;
   gap: 10px;
+}
+
+.value-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.value-summary > span:last-child {
+  font-weight: 800;
 }
 
 .time-grid {
@@ -1214,7 +1285,7 @@ button.project-table-row {
   }
 
   .queue-card .status-chip,
-  .inbox-card > .status-chip,
+  .inbox-card > .session-badges,
   .quick-actions {
     grid-column: 2;
   }

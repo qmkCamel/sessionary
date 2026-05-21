@@ -8,9 +8,11 @@ import type {
   ScanResult,
   SessionPatch,
   SessionRecord,
+  SessionStatus,
   SourceStatus
 } from "../shared/types";
 import { createTranslator, type Locale } from "../i18n";
+import { classifySessionValue } from "../shared/value";
 
 const fallbackDate = "2026-05-19";
 
@@ -52,12 +54,14 @@ let sessions: SessionRecord[] = [
     reviewSeconds: 720,
     repairSeconds: 0,
     reviewStartedAt: null,
+    repairStartedAt: null,
     timeFields: {
       prompting: "estimated",
       waiting: "estimated",
       review: "estimated",
       repair: "estimated"
     },
+    value: { category: "unreviewed", score: 50, reasons: ["needs_review"] },
     summary: "Shaped Sessionary into a local-first AI coding session inbox",
     sourceFile: "~/.codex/sessions/2026/05/19/sessionary.jsonl",
     gitBranch: "main",
@@ -88,12 +92,14 @@ let sessions: SessionRecord[] = [
     reviewSeconds: 420,
     repairSeconds: 300,
     reviewStartedAt: null,
+    repairStartedAt: null,
     timeFields: {
       prompting: "estimated",
       waiting: "estimated",
       review: "estimated",
       repair: "estimated"
     },
+    value: { category: "unreviewed", score: 50, reasons: ["needs_review"] },
     summary: "Continued Marker Today flow implementation and roadmap sync",
     sourceFile: "~/.claude/projects/marker/session.jsonl",
     gitBranch: "feature/ios-v1",
@@ -124,12 +130,14 @@ let sessions: SessionRecord[] = [
     reviewSeconds: 300,
     repairSeconds: 480,
     reviewStartedAt: null,
+    repairStartedAt: null,
     timeFields: {
       prompting: "estimated",
       waiting: "estimated",
       review: "estimated",
       repair: "estimated"
     },
+    value: { category: "needs_human_repair", score: 32, reasons: ["needs_repair", "high_repair_time"] },
     summary: "Patched browser storage adapter and side panel persistence behavior",
     sourceFile: "~/.codex/sessions/2026/05/19/peoplelens.jsonl",
     gitBranch: "add-storage-adapter",
@@ -186,6 +194,13 @@ const overlaps: OverlapInterval[] = [
   }
 ];
 
+function withValue(session: SessionRecord): SessionRecord {
+  return {
+    ...session,
+    value: classifySessionValue(session)
+  };
+}
+
 function metricsFor(date: string, currentSessions: SessionRecord[]): DayMetrics {
   return {
     date,
@@ -195,6 +210,13 @@ function metricsFor(date: string, currentSessions: SessionRecord[]): DayMetrics 
     promptingSecondsEstimated: currentSessions.reduce((total, session) => total + session.promptingSeconds, 0),
     reviewSecondsEstimated: currentSessions.reduce((total, session) => total + session.reviewSeconds, 0),
     repairSecondsEstimated: currentSessions.reduce((total, session) => total + session.repairSeconds, 0),
+    toolCallCount: currentSessions.reduce((total, session) => total + session.toolCallCount, 0),
+    tokenCount: currentSessions.reduce((total, session) => total + (session.tokenCount ?? 0), 0),
+    costAmount: currentSessions.reduce((total, session) => total + (session.costAmount ?? 0), 0),
+    highValueCount: currentSessions.filter((session) => session.value.category === "high_value").length,
+    lowValueCount: currentSessions.filter((session) => session.value.category === "low_value").length,
+    needsRepairValueCount: currentSessions.filter((session) => session.value.category === "needs_human_repair").length,
+    discardedValueCount: currentSessions.filter((session) => session.value.category === "discarded").length,
     parallelSeconds: overlaps.reduce((total, overlap) => total + overlap.seconds, 0),
     maxConcurrentSessions: 2,
     maxConcurrentProjects: 2,
@@ -211,8 +233,9 @@ export function fallbackLedger(date = fallbackDate): DayLedger {
     startedAt: session.startedAt.replace(fallbackDate, date),
     endedAt: session.endedAt?.replace(fallbackDate, date) ?? null,
     statusUpdatedAt: session.statusUpdatedAt?.replace(fallbackDate, date) ?? null,
-    reviewStartedAt: session.reviewStartedAt?.replace(fallbackDate, date) ?? null
-  }));
+    reviewStartedAt: session.reviewStartedAt?.replace(fallbackDate, date) ?? null,
+    repairStartedAt: session.repairStartedAt?.replace(fallbackDate, date) ?? null
+  })).map(withValue);
 
   return {
     metrics: metricsFor(date, currentSessions),
@@ -246,7 +269,7 @@ export function fallbackScan(): ScanResult {
 
 export function fallbackUpdate(id: string, patch: SessionPatch): SessionRecord {
   const current = sessions.find((session) => session.id === id) ?? sessions[0];
-  const next: SessionRecord = {
+  const next: SessionRecord = withValue({
     ...current,
     ...patch,
     statusUpdatedAt: patch.status ? new Date().toISOString() : current.statusUpdatedAt,
@@ -257,7 +280,39 @@ export function fallbackUpdate(id: string, patch: SessionPatch): SessionRecord {
       review: patch.reviewSeconds == null ? current.timeFields.review : "manual",
       repair: patch.repairSeconds == null ? current.timeFields.repair : "manual"
     }
-  };
+  });
+  sessions = sessions.map((session) => (session.id === next.id ? next : session));
+  return clone(next);
+}
+
+export function fallbackStartRepair(id: string): SessionRecord {
+  const current = sessions.find((session) => session.id === id) ?? sessions[0];
+  const next = withValue({
+    ...current,
+    status: "needs_repair",
+    statusUpdatedAt: new Date().toISOString(),
+    repairStartedAt: new Date().toISOString()
+  });
+  sessions = sessions.map((session) => (session.id === next.id ? next : session));
+  return clone(next);
+}
+
+export function fallbackFinishRepair(id: string, status: SessionStatus = "repaired"): SessionRecord {
+  const current = sessions.find((session) => session.id === id) ?? sessions[0];
+  const elapsedSeconds = current.repairStartedAt
+    ? Math.max(0, Math.round((Date.now() - new Date(current.repairStartedAt).getTime()) / 1000))
+    : 0;
+  const next = withValue({
+    ...current,
+    status,
+    statusUpdatedAt: new Date().toISOString(),
+    repairStartedAt: null,
+    repairSeconds: current.repairSeconds + elapsedSeconds,
+    timeFields: {
+      ...current.timeFields,
+      repair: "manual"
+    }
+  });
   sessions = sessions.map((session) => (session.id === next.id ? next : session));
   return clone(next);
 }
@@ -286,12 +341,73 @@ export function fallbackReport(date = fallbackDate, locale: Locale = "en"): Repo
       `${t("report.fallback.sessions")}: ${ledger.metrics.sessionCount}`,
       `${t("report.fallback.projects")}: ${ledger.metrics.projectCount}`,
       `${t("report.fallback.parallelWork")}: ${Math.round(ledger.metrics.parallelSeconds / 60)}m`,
+      `Tool calls: ${ledger.metrics.toolCallCount}`,
+      `Tokens: ${ledger.metrics.tokenCount}`,
+      `Cost: $${ledger.metrics.costAmount.toFixed(4)}`,
+      `Value mix: ${ledger.metrics.highValueCount} high, ${ledger.metrics.lowValueCount} low, ${ledger.metrics.needsRepairValueCount} repair, ${ledger.metrics.discardedValueCount} discarded`,
       "",
       `## ${t("report.fallback.projects")}`,
       ...topProjects,
       "",
       `## ${t("report.fallback.followUps")}`,
       ...(openItems.length > 0 ? openItems : [`- ${t("report.fallback.noOpenItems")}`])
+    ].join("\n")
+  };
+}
+
+function weekLabels(date: string): [string, string] {
+  const [year, month, day] = date.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  const mondayOffset = (parsed.getUTCDay() + 6) % 7;
+  const monday = new Date(parsed);
+  monday.setUTCDate(parsed.getUTCDate() - mondayOffset);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  const format = (value: Date) => value.toISOString().slice(0, 10);
+  return [format(monday), format(sunday)];
+}
+
+export function fallbackWeeklyReport(date = fallbackDate, locale: Locale = "en"): ReportResult {
+  const ledger = fallbackLedger(date);
+  const t = createTranslator(locale);
+  const [start, end] = weekLabels(date);
+  const topValue = [...ledger.sessions]
+    .filter((session) => session.value.category === "high_value" || session.value.category === "mixed_value")
+    .sort((left, right) => right.value.score - left.value.score)
+    .slice(0, 8);
+  const waste = [...ledger.sessions]
+    .filter((session) =>
+      session.value.category === "low_value" ||
+      session.value.category === "needs_human_repair" ||
+      session.value.category === "discarded"
+    )
+    .sort((left, right) => left.value.score - right.value.score)
+    .slice(0, 8);
+  const line = (session: SessionRecord) =>
+    `- ${session.projectName}: ${session.summary} (${session.value.category}, score ${session.value.score}, tools ${session.toolCallCount}, cost ${session.costAmount == null ? "n/a" : `$${session.costAmount.toFixed(4)}`})`;
+
+  return {
+    markdown: [
+      `# Weekly Report - ${start} to ${end}`,
+      "",
+      `${t("report.fallback.sessions")}: ${ledger.metrics.sessionCount}`,
+      `${t("report.fallback.projects")}: ${ledger.metrics.projectCount}`,
+      `Prompting estimated: ${Math.round(ledger.metrics.promptingSecondsEstimated / 60)}m`,
+      `AI waiting estimated: ${Math.round(ledger.metrics.aiWaitingSecondsEstimated / 60)}m`,
+      `Review estimated: ${Math.round(ledger.metrics.reviewSecondsEstimated / 60)}m`,
+      `Repair estimated: ${Math.round(ledger.metrics.repairSecondsEstimated / 60)}m`,
+      `Tool calls: ${ledger.metrics.toolCallCount}`,
+      `Tokens: ${ledger.metrics.tokenCount}`,
+      `Cost: $${ledger.metrics.costAmount.toFixed(4)}`,
+      "",
+      "## Most Valuable Sessions",
+      ...(topValue.length > 0 ? topValue.map(line) : ["- No high-value sessions marked yet."]),
+      "",
+      "## Most Wasteful Sessions",
+      ...(waste.length > 0 ? waste.map(line) : ["- No obvious waste sessions based on current marks."]),
+      "",
+      "## Workflow Notes",
+      "- Review and repair are estimated until you confirm them in session detail."
     ].join("\n")
   };
 }
