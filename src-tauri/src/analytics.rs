@@ -4,9 +4,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use crate::db;
 use crate::ingest;
 use crate::models::{
-    DayLedger, DayMetrics, InsightSeverity, OverlapInterval, ParallelInsight, ParallelInsightKind,
-    ParallelReviewSummary, ProjectSummary, SessionRecord, SessionSource, SessionStatus,
-    SessionValueCategory,
+    DayLedger, DayMetrics, DeliveryInsight, DeliveryInsightKind, DeliveryReviewSummary,
+    InsightSeverity, MergeStatus, OperatingReviewSummary, OverlapInterval, ParallelInsight,
+    ParallelInsightKind, ParallelReviewSummary, PlaybookItem, PlaybookKind, ProjectSummary,
+    SessionRecord, SessionSource, SessionStatus, SessionValueCategory, TaskType, TaskTypeSummary,
+    ToolPerformanceSummary,
 };
 use crate::util::{day_range, parse_utc};
 
@@ -469,6 +471,483 @@ pub fn build_parallel_review_summary(
     })
 }
 
+fn session_successful(session: &SessionRecord) -> bool {
+    matches!(
+        session.status,
+        SessionStatus::Useful | SessionStatus::Repaired
+    ) || matches!(
+        session.value.category,
+        SessionValueCategory::HighValue | SessionValueCategory::MixedValue
+    )
+}
+
+pub fn build_delivery_review_summary(sessions: &[SessionRecord]) -> DeliveryReviewSummary {
+    let sessions_with_file_changes = sessions
+        .iter()
+        .filter(|session| {
+            !session.delivery.changed_files.is_empty() || !session.changed_files.is_empty()
+        })
+        .count();
+    let sessions_with_commits = sessions
+        .iter()
+        .filter(|session| session.delivery.committed_after_session)
+        .count();
+    let sessions_with_dirty_changes = sessions
+        .iter()
+        .filter(|session| session.delivery.dirty_after_session || session.git_dirty)
+        .count();
+    let absorbed_sessions = sessions
+        .iter()
+        .filter(|session| session.delivery.absorbed)
+        .count();
+    let sessions_with_tests = sessions
+        .iter()
+        .filter(|session| !session.delivery.test_commands.is_empty())
+        .count();
+    let sessions_with_pr = sessions
+        .iter()
+        .filter(|session| session.delivery.integration.pull_request.is_some())
+        .count();
+    let sessions_with_ci_signal = sessions
+        .iter()
+        .filter(|session| {
+            !matches!(
+                session.delivery.integration.ci.status,
+                crate::models::CiStatus::NotRecorded
+            )
+        })
+        .count();
+    let sessions_with_issues = sessions
+        .iter()
+        .filter(|session| !session.delivery.integration.issues.is_empty())
+        .count();
+    let merged_sessions = sessions
+        .iter()
+        .filter(|session| {
+            session
+                .delivery
+                .integration
+                .pull_request
+                .as_ref()
+                .map(|pull_request| pull_request.merge_status == MergeStatus::Merged)
+                .unwrap_or(false)
+                || session
+                    .delivery
+                    .commits
+                    .iter()
+                    .any(|commit| commit.merged_to_default_branch == Some(true))
+        })
+        .count();
+    let review_comment_known_sessions = sessions
+        .iter()
+        .filter(|session| session.delivery.integration.review_comment_count.is_some())
+        .count();
+
+    let unabsorbed_ids = sessions
+        .iter()
+        .filter(|session| {
+            (!session.delivery.changed_files.is_empty() || session.delivery.committed_after_session)
+                && !session.delivery.absorbed
+        })
+        .map(|session| session.id.clone())
+        .collect::<Vec<_>>();
+    let dirty_ids = sessions
+        .iter()
+        .filter(|session| session.delivery.dirty_after_session || session.git_dirty)
+        .map(|session| session.id.clone())
+        .collect::<Vec<_>>();
+    let missing_test_ids = sessions
+        .iter()
+        .filter(|session| {
+            (!session.delivery.changed_files.is_empty() || !session.changed_files.is_empty())
+                && session.delivery.test_commands.is_empty()
+        })
+        .map(|session| session.id.clone())
+        .collect::<Vec<_>>();
+
+    let mut insights = Vec::new();
+    if !unabsorbed_ids.is_empty() {
+        insights.push(DeliveryInsight {
+            kind: DeliveryInsightKind::UnabsorbedOutput,
+            severity: InsightSeverity::Warning,
+            count: unabsorbed_ids.len(),
+            session_ids: unabsorbed_ids,
+        });
+    }
+    if !dirty_ids.is_empty() {
+        insights.push(DeliveryInsight {
+            kind: DeliveryInsightKind::DirtyAfterSession,
+            severity: InsightSeverity::Warning,
+            count: dirty_ids.len(),
+            session_ids: dirty_ids,
+        });
+    }
+    if !missing_test_ids.is_empty() {
+        insights.push(DeliveryInsight {
+            kind: DeliveryInsightKind::MissingTests,
+            severity: InsightSeverity::Info,
+            count: missing_test_ids.len(),
+            session_ids: missing_test_ids,
+        });
+    }
+    if sessions_with_pr > 0 || sessions_with_issues > 0 {
+        insights.push(DeliveryInsight {
+            kind: DeliveryInsightKind::LinkedDelivery,
+            severity: InsightSeverity::Info,
+            count: sessions_with_pr + sessions_with_issues,
+            session_ids: sessions
+                .iter()
+                .filter(|session| {
+                    session.delivery.integration.pull_request.is_some()
+                        || !session.delivery.integration.issues.is_empty()
+                })
+                .map(|session| session.id.clone())
+                .collect(),
+        });
+    }
+
+    DeliveryReviewSummary {
+        sessions_with_file_changes,
+        sessions_with_commits,
+        sessions_with_dirty_changes,
+        absorbed_sessions,
+        sessions_with_tests,
+        sessions_with_pr,
+        sessions_with_ci_signal,
+        sessions_with_issues,
+        merged_sessions,
+        review_comment_known_sessions,
+        insights,
+    }
+}
+
+pub fn task_type_for_session(session: &SessionRecord) -> TaskType {
+    let text = format!(
+        "{} {} {} {}",
+        session.summary,
+        session.note,
+        session.git_branch.clone().unwrap_or_default(),
+        session
+            .delivery
+            .test_commands
+            .iter()
+            .map(|command| command.command.clone())
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+    .to_lowercase();
+    let files = session
+        .delivery
+        .changed_files
+        .iter()
+        .chain(session.changed_files.iter())
+        .map(|file| file.to_lowercase())
+        .collect::<Vec<_>>();
+
+    if session.status == SessionStatus::NeedsRepair
+        || session.repair_seconds > 0
+        || text.contains("repair")
+        || text.contains("bug")
+        || text.contains("fix")
+        || text.contains("failed")
+    {
+        return TaskType::Repair;
+    }
+    if files.iter().any(|file| {
+        file.ends_with(".test.ts")
+            || file.ends_with(".test.tsx")
+            || file.ends_with("_test.rs")
+            || file.contains("/test")
+            || file.contains("/spec")
+    }) || text.contains("test")
+        || text.contains("typecheck")
+    {
+        return TaskType::Tests;
+    }
+    if files
+        .iter()
+        .any(|file| file.ends_with(".md") || file.contains("docs/") || file.contains("roadmap"))
+        || text.contains("docs")
+        || text.contains("roadmap")
+    {
+        return TaskType::Docs;
+    }
+    if files.iter().any(|file| {
+        file.ends_with(".tsx")
+            || file.ends_with(".jsx")
+            || file.ends_with(".css")
+            || file.contains("src/app")
+            || file.contains("views/")
+    }) || text.contains("ui")
+        || text.contains("frontend")
+        || text.contains("layout")
+    {
+        return TaskType::UiFrontend;
+    }
+    if text.contains("pr")
+        || text.contains("ci")
+        || text.contains("commit")
+        || text.contains("release")
+        || files
+            .iter()
+            .any(|file| file.contains(".github/") || file.contains("workflow"))
+    {
+        return TaskType::Delivery;
+    }
+    if files.iter().any(|file| {
+        file.ends_with(".rs")
+            || file.ends_with(".sql")
+            || file.contains("src-tauri")
+            || file.contains("parser")
+            || file.contains("analytics")
+            || file.contains("api")
+    }) || text.contains("backend")
+        || text.contains("parser")
+        || text.contains("analytics")
+    {
+        return TaskType::Backend;
+    }
+    TaskType::Unknown
+}
+
+pub fn build_operating_review_summary(
+    sessions: &[SessionRecord],
+    parallel_review: &ParallelReviewSummary,
+    delivery_review: &DeliveryReviewSummary,
+) -> OperatingReviewSummary {
+    let successful_sessions = sessions
+        .iter()
+        .filter(|session| session_successful(session))
+        .count();
+    let success_rate = if sessions.is_empty() {
+        0.0
+    } else {
+        successful_sessions as f64 / sessions.len() as f64
+    };
+    let cross_tool_source_count = sessions
+        .iter()
+        .map(|session| session.source)
+        .collect::<BTreeSet<_>>()
+        .len();
+    let cross_project_count = sessions
+        .iter()
+        .map(|session| session.project_path.clone())
+        .collect::<BTreeSet<_>>()
+        .len();
+
+    let mut by_task = BTreeMap::<TaskType, Vec<&SessionRecord>>::new();
+    let mut by_source = BTreeMap::<SessionSource, Vec<&SessionRecord>>::new();
+    let mut by_source_task = BTreeMap::<(SessionSource, TaskType), Vec<&SessionRecord>>::new();
+    for session in sessions {
+        let task_type = task_type_for_session(session);
+        by_task.entry(task_type).or_default().push(session);
+        by_source.entry(session.source).or_default().push(session);
+        by_source_task
+            .entry((session.source, task_type))
+            .or_default()
+            .push(session);
+    }
+
+    let task_types = by_task
+        .iter()
+        .map(|(task_type, task_sessions)| {
+            let recommended_source = by_source_task
+                .iter()
+                .filter(|((_, bucket_task), _)| bucket_task == task_type)
+                .max_by(|left, right| {
+                    let left_success = left
+                        .1
+                        .iter()
+                        .filter(|session| session_successful(session))
+                        .count();
+                    let right_success = right
+                        .1
+                        .iter()
+                        .filter(|session| session_successful(session))
+                        .count();
+                    let left_score: i64 = left.1.iter().map(|session| session.value.score).sum();
+                    let right_score: i64 = right.1.iter().map(|session| session.value.score).sum();
+                    left_success
+                        .cmp(&right_success)
+                        .then(left_score.cmp(&right_score))
+                })
+                .map(|((source, _), _)| *source);
+            let total_score: i64 = task_sessions
+                .iter()
+                .map(|session| session.value.score)
+                .sum();
+            TaskTypeSummary {
+                task_type: *task_type,
+                session_count: task_sessions.len(),
+                successful_sessions: task_sessions
+                    .iter()
+                    .filter(|session| session_successful(session))
+                    .count(),
+                repair_sessions: task_sessions
+                    .iter()
+                    .filter(|session| {
+                        matches!(
+                            session.status,
+                            SessionStatus::NeedsRepair | SessionStatus::Repaired
+                        ) || session.repair_seconds > 0
+                    })
+                    .count(),
+                average_value_score: if task_sessions.is_empty() {
+                    0.0
+                } else {
+                    total_score as f64 / task_sessions.len() as f64
+                },
+                recommended_source,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let tool_performance = by_source
+        .iter()
+        .map(|(source, source_sessions)| {
+            let average_score = if source_sessions.is_empty() {
+                0.0
+            } else {
+                source_sessions
+                    .iter()
+                    .map(|session| session.value.score)
+                    .sum::<i64>() as f64
+                    / source_sessions.len() as f64
+            };
+            let mut task_counts = BTreeMap::<TaskType, usize>::new();
+            for session in source_sessions {
+                *task_counts
+                    .entry(task_type_for_session(session))
+                    .or_default() += 1;
+            }
+            ToolPerformanceSummary {
+                source: *source,
+                session_count: source_sessions.len(),
+                successful_sessions: source_sessions
+                    .iter()
+                    .filter(|session| session_successful(session))
+                    .count(),
+                average_value_score: average_score,
+                top_task_type: task_counts
+                    .into_iter()
+                    .max_by(|left, right| left.1.cmp(&right.1))
+                    .map(|(task_type, _)| task_type),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut playbook = Vec::new();
+    if let Some(((source, task_type), bucket)) = by_source_task.iter().find(|(_, bucket)| {
+        !bucket.is_empty()
+            && bucket
+                .iter()
+                .filter(|session| session_successful(session))
+                .count()
+                * 100
+                / bucket.len()
+                >= 60
+            && bucket
+                .iter()
+                .map(|session| session.value.score)
+                .sum::<i64>()
+                / bucket.len() as i64
+                >= 55
+    }) {
+        playbook.push(PlaybookItem {
+            kind: PlaybookKind::ReusePattern,
+            title: format!("Reuse {} for {}", source.as_str(), task_type.as_str()),
+            detail: "This local pattern produced solid value in the current review window."
+                .to_string(),
+            source: Some(*source),
+            task_type: Some(*task_type),
+            session_ids: bucket.iter().map(|session| session.id.clone()).collect(),
+        });
+    }
+    if parallel_review.review_backlog_session_count >= 2 {
+        playbook.push(PlaybookItem {
+            kind: PlaybookKind::ClearReviewBacklog,
+            title: "Clear review backlog before opening more agents".to_string(),
+            detail: "Several completed sessions are still waiting for review or repair."
+                .to_string(),
+            source: None,
+            task_type: None,
+            session_ids: sessions
+                .iter()
+                .filter(|session| {
+                    matches!(
+                        session.status,
+                        SessionStatus::Unknown
+                            | SessionStatus::NeedsReview
+                            | SessionStatus::NeedsRepair
+                    )
+                })
+                .map(|session| session.id.clone())
+                .collect(),
+        });
+    }
+    if delivery_review.sessions_with_dirty_changes > 0
+        || delivery_review.absorbed_sessions < delivery_review.sessions_with_file_changes
+    {
+        playbook.push(PlaybookItem {
+            kind: PlaybookKind::AbsorbBeforeMoreAgents,
+            title: "Absorb or shelve delivery output before widening parallelism".to_string(),
+            detail: "There are local code changes that have not fully landed in the review loop."
+                .to_string(),
+            source: None,
+            task_type: Some(TaskType::Delivery),
+            session_ids: sessions
+                .iter()
+                .filter(|session| {
+                    session.delivery.dirty_after_session
+                        || (!session.delivery.changed_files.is_empty()
+                            && !session.delivery.absorbed)
+                })
+                .map(|session| session.id.clone())
+                .collect(),
+        });
+    }
+    if parallel_review.parallel_project_ratio >= 0.2 {
+        playbook.push(PlaybookItem {
+            kind: PlaybookKind::KeepParallelLimitSwitches,
+            title: "Keep parallel agents, cap short switching".to_string(),
+            detail: "Parallel work is visible; review short switches before adding more concurrent sessions."
+                .to_string(),
+            source: None,
+            task_type: None,
+            session_ids: sessions.iter().map(|session| session.id.clone()).collect(),
+        });
+    }
+    if delivery_review.sessions_with_file_changes > delivery_review.sessions_with_tests {
+        playbook.push(PlaybookItem {
+            kind: PlaybookKind::AddTestLoop,
+            title: "Attach a local test loop to file-changing sessions".to_string(),
+            detail: "Some code-changing sessions do not have a recorded test command yet."
+                .to_string(),
+            source: None,
+            task_type: Some(TaskType::Tests),
+            session_ids: sessions
+                .iter()
+                .filter(|session| {
+                    !session.delivery.changed_files.is_empty()
+                        && session.delivery.test_commands.is_empty()
+                })
+                .map(|session| session.id.clone())
+                .collect(),
+        });
+    }
+
+    OperatingReviewSummary {
+        total_sessions: sessions.len(),
+        successful_sessions,
+        success_rate,
+        cross_tool_source_count,
+        cross_project_count,
+        task_types,
+        tool_performance,
+        playbook,
+    }
+}
+
 pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
     db::init()?;
     let (start, end) = day_range(date)?;
@@ -488,6 +967,9 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
         max_project_sessions.max(max_session_sessions),
         max_projects,
     )?;
+    let delivery_review = build_delivery_review_summary(&sessions);
+    let operating_review =
+        build_operating_review_summary(&sessions, &parallel_review, &delivery_review);
 
     Ok(DayLedger {
         metrics: DayMetrics {
@@ -535,6 +1017,11 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
             ai_waiting_human_overlap_seconds: parallel_review.ai_waiting_human_overlap_seconds,
             review_backlog_session_count: parallel_review.review_backlog_session_count,
             context_switch_count: parallel_review.context_switch_count,
+            absorbed_session_count: delivery_review.absorbed_sessions,
+            committed_session_count: delivery_review.sessions_with_commits,
+            dirty_delivery_session_count: delivery_review.sessions_with_dirty_changes,
+            pr_linked_session_count: delivery_review.sessions_with_pr,
+            ci_signal_session_count: delivery_review.sessions_with_ci_signal,
             max_concurrent_sessions: max_project_sessions.max(max_session_sessions),
             max_concurrent_projects: max_projects,
             unknown_count: sessions
@@ -556,6 +1043,8 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
         overlaps: project_overlaps,
         session_overlaps,
         parallel_review,
+        delivery_review,
+        operating_review,
         source_status,
     })
 }
@@ -563,7 +1052,9 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{SessionSource, TimeFields};
+    use crate::models::{
+        DeliveryLink, SessionSource, TestCommandRecord, TestCommandStatus, TimeFields,
+    };
 
     fn session(id: &str, project: &str, start: &str, end: &str) -> SessionRecord {
         SessionRecord {
@@ -598,6 +1089,7 @@ mod tests {
             source_file: String::new(),
             git_branch: None,
             git_dirty: false,
+            delivery: Default::default(),
         }
     }
 
@@ -679,5 +1171,62 @@ mod tests {
             .insights
             .iter()
             .any(|insight| insight.kind == ParallelInsightKind::ReviewBottleneck));
+    }
+
+    #[test]
+    fn builds_delivery_and_operating_review_summaries() {
+        let mut useful = session(
+            "a",
+            "alpha",
+            "2026-05-19T01:00:00.000Z",
+            "2026-05-19T01:30:00.000Z",
+        );
+        useful.status = SessionStatus::Useful;
+        useful.changed_files = vec!["src/App.tsx".to_string()];
+        useful.delivery = DeliveryLink {
+            changed_files: vec!["src/App.tsx".to_string()],
+            committed_after_session: true,
+            absorbed: true,
+            test_commands: vec![TestCommandRecord {
+                command: "npm test".to_string(),
+                status: TestCommandStatus::Passed,
+                source: "fixture".to_string(),
+            }],
+            confidence: 0.8,
+            ..DeliveryLink::default()
+        };
+        useful.value = crate::models::SessionValue::for_session(&useful);
+
+        let mut repair = session(
+            "b",
+            "beta",
+            "2026-05-19T02:00:00.000Z",
+            "2026-05-19T02:30:00.000Z",
+        );
+        repair.status = SessionStatus::NeedsRepair;
+        repair.git_dirty = true;
+        repair.delivery = DeliveryLink {
+            changed_files: vec!["src/storage/adapter.ts".to_string()],
+            dirty_after_session: true,
+            confidence: 0.5,
+            ..DeliveryLink::default()
+        };
+        repair.value = crate::models::SessionValue::for_session(&repair);
+
+        let sessions = vec![useful, repair];
+        let delivery = build_delivery_review_summary(&sessions);
+        let parallel = ParallelReviewSummary::default();
+        let operating = build_operating_review_summary(&sessions, &parallel, &delivery);
+
+        assert_eq!(delivery.sessions_with_commits, 1);
+        assert_eq!(delivery.absorbed_sessions, 1);
+        assert_eq!(delivery.sessions_with_dirty_changes, 1);
+        assert_eq!(delivery.sessions_with_tests, 1);
+        assert_eq!(operating.total_sessions, 2);
+        assert!(operating
+            .task_types
+            .iter()
+            .any(|task| task.task_type == TaskType::Tests));
+        assert!(!operating.playbook.is_empty());
     }
 }

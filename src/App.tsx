@@ -42,17 +42,21 @@ import { createTranslator, resolveLocale, type LanguageSetting, type Translator,
 import type {
   AppSettings,
   DayLedger,
+  DeliveryInsight,
+  DeliveryInsightKind,
   OverlapInterval,
   ParallelInsight,
   ParallelInsightKind,
+  PlaybookItem,
   SessionPatch,
   SessionRecord,
   SessionStatus,
   SessionValueCategory,
-  SessionValueReason
+  SessionValueReason,
+  TaskType
 } from "./shared/types";
 
-type View = "today" | "inbox" | "timeline" | "report" | "settings";
+type View = "today" | "inbox" | "timeline" | "operating" | "report" | "settings";
 type Filter = "all" | SessionStatus;
 type ZoomMinutes = 15 | 30 | 60;
 type RangeSelection = { startedAt: string; endedAt: string };
@@ -113,10 +117,28 @@ const parallelInsightKeys: Record<ParallelInsightKind, TranslationKey> = {
   low_parallelism: "parallelInsight.low_parallelism"
 };
 
+const deliveryInsightKeys: Record<DeliveryInsightKind, TranslationKey> = {
+  unabsorbed_output: "deliveryInsight.unabsorbed_output",
+  dirty_after_session: "deliveryInsight.dirty_after_session",
+  missing_tests: "deliveryInsight.missing_tests",
+  linked_delivery: "deliveryInsight.linked_delivery"
+};
+
+const taskTypeKeys: Record<TaskType, TranslationKey> = {
+  ui_frontend: "taskType.ui_frontend",
+  docs: "taskType.docs",
+  tests: "taskType.tests",
+  backend: "taskType.backend",
+  delivery: "taskType.delivery",
+  repair: "taskType.repair",
+  unknown: "taskType.unknown"
+};
+
 const navItems: Array<{ id: View; labelKey: TranslationKey; icon: typeof LayoutDashboard }> = [
   { id: "today", labelKey: "nav.today", icon: LayoutDashboard },
   { id: "inbox", labelKey: "nav.inbox", icon: Inbox },
   { id: "timeline", labelKey: "nav.timeline", icon: Activity },
+  { id: "operating", labelKey: "nav.operating", icon: GitBranch },
   { id: "report", labelKey: "nav.report", icon: FileText },
   { id: "settings", labelKey: "nav.settings", icon: Settings }
 ];
@@ -305,6 +327,71 @@ function ParallelReviewPanel({
       </div>
     </section>
   );
+}
+
+function deliveryInsightDetail(insight: DeliveryInsight, t: Translator): string {
+  if (insight.kind === "unabsorbed_output") return `${insight.count} ${t("deliveryReview.unabsorbed")}`;
+  if (insight.kind === "dirty_after_session") return `${insight.count} ${t("deliveryReview.dirty")}`;
+  if (insight.kind === "missing_tests") return `${insight.count} ${t("deliveryReview.missingTests")}`;
+  return `${insight.count} ${t("deliveryReview.linkedSignals")}`;
+}
+
+function DeliveryInsightCard({ insight }: { insight: DeliveryInsight }) {
+  const t = useTranslation();
+  return (
+    <div className={`insight-card ${insight.severity}`}>
+      <strong>{t(deliveryInsightKeys[insight.kind])}</strong>
+      <span>{deliveryInsightDetail(insight, t)}</span>
+    </div>
+  );
+}
+
+function DeliveryReviewStrip({ ledger }: { ledger: DayLedger }) {
+  const t = useTranslation();
+  return (
+    <section className="delivery-strip">
+      <Metric label={t("deliveryReview.absorbed")} value={`${ledger.deliveryReview.absorbedSessions}/${ledger.metrics.sessionCount}`} />
+      <Metric label={t("deliveryReview.committed")} value={ledger.deliveryReview.sessionsWithCommits} />
+      <Metric label={t("deliveryReview.dirty")} value={ledger.deliveryReview.sessionsWithDirtyChanges} />
+      <Metric label={t("deliveryReview.tests")} value={ledger.deliveryReview.sessionsWithTests} />
+      <Metric label={t("deliveryReview.prCiIssue")} value={`${ledger.deliveryReview.sessionsWithPr}/${ledger.deliveryReview.sessionsWithCiSignal}/${ledger.deliveryReview.sessionsWithIssues}`} />
+    </section>
+  );
+}
+
+function ciStatusLabel(status: SessionRecord["delivery"]["integration"]["ci"]["status"], t: Translator) {
+  if (status === "passed") return t("deliveryReview.ciPassed");
+  if (status === "failed") return t("deliveryReview.ciFailed");
+  if (status === "unknown") return t("deliveryReview.ciUnknown");
+  return t("deliveryReview.ciNotRecorded");
+}
+
+function mergeStatusLabel(status: NonNullable<SessionRecord["delivery"]["integration"]["pullRequest"]>["mergeStatus"], t: Translator) {
+  if (status === "merged") return t("deliveryReview.merged");
+  if (status === "not_merged") return t("deliveryReview.notMerged");
+  return t("deliveryReview.unknownRemote");
+}
+
+function playbookTitle(item: PlaybookItem, t: Translator) {
+  const keys: Record<PlaybookItem["kind"], TranslationKey> = {
+    reuse_pattern: "playbook.reuse_pattern",
+    clear_review_backlog: "playbook.clear_review_backlog",
+    absorb_before_more_agents: "playbook.absorb_before_more_agents",
+    keep_parallel_limit_switches: "playbook.keep_parallel_limit_switches",
+    add_test_loop: "playbook.add_test_loop"
+  };
+  return t(keys[item.kind]);
+}
+
+function playbookDetail(item: PlaybookItem, t: Translator) {
+  const keys: Record<PlaybookItem["kind"], TranslationKey> = {
+    reuse_pattern: "playbookDetail.reuse_pattern",
+    clear_review_backlog: "playbookDetail.clear_review_backlog",
+    absorb_before_more_agents: "playbookDetail.absorb_before_more_agents",
+    keep_parallel_limit_switches: "playbookDetail.keep_parallel_limit_switches",
+    add_test_loop: "playbookDetail.add_test_loop"
+  };
+  return t(keys[item.kind]);
 }
 
 function overlapsEqual(left?: OverlapInterval, right?: OverlapInterval) {
@@ -672,11 +759,20 @@ function TodayView({
       </div>
 
       <ParallelReviewStrip ledger={ledger} />
+      <DeliveryReviewStrip ledger={ledger} />
 
       {ledger.parallelReview.insights.length > 0 && (
         <section className="insight-grid" aria-label={t("parallelReview.insights")}>
           {ledger.parallelReview.insights.slice(0, 3).map((insight) => (
             <ParallelInsightCard key={`${insight.kind}-${insight.count}-${insight.seconds}`} insight={insight} />
+          ))}
+        </section>
+      )}
+
+      {ledger.deliveryReview.insights.length > 0 && (
+        <section className="insight-grid" aria-label={t("deliveryReview.insights")}>
+          {ledger.deliveryReview.insights.slice(0, 3).map((insight) => (
+            <DeliveryInsightCard key={`${insight.kind}-${insight.count}`} insight={insight} />
           ))}
         </section>
       )}
@@ -1152,6 +1248,51 @@ function ReportOverview({ ledger }: { ledger: DayLedger }) {
         </dl>
       </section>
 
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("deliveryReview.title")}</h2>
+        </div>
+        <dl className="overview-list">
+          <div>
+            <dt>{t("deliveryReview.absorbed")}</dt>
+            <dd>{ledger.deliveryReview.absorbedSessions}/{ledger.metrics.sessionCount}</dd>
+          </div>
+          <div>
+            <dt>{t("deliveryReview.committed")}</dt>
+            <dd>{ledger.deliveryReview.sessionsWithCommits}</dd>
+          </div>
+          <div>
+            <dt>{t("deliveryReview.prLinked")}</dt>
+            <dd>{ledger.deliveryReview.sessionsWithPr}</dd>
+          </div>
+          <div>
+            <dt>{t("deliveryReview.ciSignals")}</dt>
+            <dd>{ledger.deliveryReview.sessionsWithCiSignal}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <h2>{t("operatingReview.title")}</h2>
+          <span>{percentLabel(ledger.operatingReview.successRate)}</span>
+        </div>
+        <dl className="overview-list">
+          <div>
+            <dt>{t("operatingReview.sources")}</dt>
+            <dd>{ledger.operatingReview.crossToolSourceCount}</dd>
+          </div>
+          <div>
+            <dt>{t("operatingReview.projects")}</dt>
+            <dd>{ledger.operatingReview.crossProjectCount}</dd>
+          </div>
+          <div>
+            <dt>{t("operatingReview.playbook")}</dt>
+            <dd>{ledger.operatingReview.playbook.length}</dd>
+          </div>
+        </dl>
+      </section>
+
       <section className="panel privacy-panel">
         <div className="panel-header">
           <h2>{t("common.localOnly")}</h2>
@@ -1159,6 +1300,142 @@ function ReportOverview({ ledger }: { ledger: DayLedger }) {
         <p>{t("report.privacyNote")}</p>
       </section>
     </aside>
+  );
+}
+
+function OperatingReviewView({ ledger, onSelect }: { ledger: DayLedger; onSelect: (session: SessionRecord) => void }) {
+  const t = useTranslation();
+  const deliveryRows = ledger.sessions
+    .filter((session) => session.delivery.changedFiles.length > 0 || session.delivery.committedAfterSession || session.delivery.integration.pullRequest)
+    .slice(0, 8);
+
+  return (
+    <main className="workspace operating-workspace">
+      <div className="page-title">
+        <div>
+          <p>{ledger.metrics.date}</p>
+          <h1>{t("nav.operating")}</h1>
+          <span>{t("operatingReview.subhead")}</span>
+        </div>
+        <span className="freshness">
+          {percentLabel(ledger.operatingReview.successRate)} · {ledger.operatingReview.playbook.length} {t("operatingReview.playbook")}
+        </span>
+      </div>
+
+      <div className="metrics-grid operating-metrics">
+        <Metric label={t("operatingReview.successRate")} value={percentLabel(ledger.operatingReview.successRate)} hint={`${ledger.operatingReview.successfulSessions}/${ledger.operatingReview.totalSessions}`} />
+        <Metric label={t("operatingReview.sources")} value={ledger.operatingReview.crossToolSourceCount} />
+        <Metric label={t("operatingReview.projects")} value={ledger.operatingReview.crossProjectCount} />
+        <Metric label={t("deliveryReview.absorbed")} value={`${ledger.deliveryReview.absorbedSessions}/${ledger.deliveryReview.sessionsWithFileChanges}`} />
+        <Metric label={t("deliveryReview.prLinked")} value={ledger.deliveryReview.sessionsWithPr} />
+        <Metric label={t("deliveryReview.ciSignals")} value={ledger.deliveryReview.sessionsWithCiSignal} />
+      </div>
+
+      <section className="panel playbook-panel">
+        <div className="panel-header">
+          <h2>{t("operatingReview.playbook")}</h2>
+          <span>{ledger.operatingReview.playbook.length}</span>
+        </div>
+        <div className="playbook-list">
+          {ledger.operatingReview.playbook.length === 0 ? (
+            <EmptyState title={t("operatingReview.noPlaybook")} />
+          ) : (
+            ledger.operatingReview.playbook.map((item) => (
+              <article key={`${item.kind}-${item.sessionIds.join("-")}`} className="playbook-card">
+                <strong>{playbookTitle(item, t)}</strong>
+                <span>{playbookDetail(item, t)}</span>
+                <small>
+                  {item.source ? sourceLabels[item.source] : t("common.localOnly")}
+                  {item.taskType ? ` · ${t(taskTypeKeys[item.taskType])}` : ""}
+                </small>
+              </article>
+            ))
+          )}
+        </div>
+      </section>
+
+      <div className="operating-grid">
+        <section className="panel">
+          <div className="panel-header">
+            <h2>{t("operatingReview.toolPerformance")}</h2>
+          </div>
+          <div className="operating-table">
+            <div className="operating-table-row table-head">
+              <span>{t("settings.sources")}</span>
+              <span>{t("metric.sessions")}</span>
+              <span>{t("operatingReview.successful")}</span>
+              <span>{t("detail.value")}</span>
+              <span>{t("operatingReview.topTask")}</span>
+            </div>
+            {ledger.operatingReview.toolPerformance.map((tool) => (
+              <div className="operating-table-row" key={tool.source}>
+                <span>{sourceLabels[tool.source]}</span>
+                <span>{tool.sessionCount}</span>
+                <span>{tool.successfulSessions}</span>
+                <span>{Math.round(tool.averageValueScore)}</span>
+                <span>{tool.topTaskType ? t(taskTypeKeys[tool.topTaskType]) : t("taskType.unknown")}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-header">
+            <h2>{t("operatingReview.taskTypes")}</h2>
+          </div>
+          <div className="operating-table">
+            <div className="operating-table-row table-head">
+              <span>{t("operatingReview.task")}</span>
+              <span>{t("metric.sessions")}</span>
+              <span>{t("operatingReview.successful")}</span>
+              <span>{t("metric.repair")}</span>
+              <span>{t("operatingReview.bestTool")}</span>
+            </div>
+            {ledger.operatingReview.taskTypes.map((task) => (
+              <div className="operating-table-row" key={task.taskType}>
+                <span>{t(taskTypeKeys[task.taskType])}</span>
+                <span>{task.sessionCount}</span>
+                <span>{task.successfulSessions}</span>
+                <span>{task.repairSessions}</span>
+                <span>{task.recommendedSource ? sourceLabels[task.recommendedSource] : t("common.notAvailable")}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <section className="panel delivery-chain-panel">
+        <div className="panel-header">
+          <h2>{t("deliveryReview.chain")}</h2>
+          <span>{t("deliveryReview.localAttribution")}</span>
+        </div>
+        <div className="delivery-table">
+          <div className="delivery-table-row table-head">
+            <span>{t("metric.sessions")}</span>
+            <span>{t("deliveryReview.absorbed")}</span>
+            <span>{t("deliveryReview.committed")}</span>
+            <span>{t("deliveryReview.dirty")}</span>
+            <span>{t("deliveryReview.prLinked")}</span>
+            <span>{t("deliveryReview.ciSignals")}</span>
+            <span>{t("deliveryReview.issues")}</span>
+          </div>
+          {deliveryRows.map((session) => (
+            <button className="delivery-table-row" key={session.id} onClick={() => onSelect(session)}>
+              <span>
+                <strong>{session.projectName}</strong>
+                <small>{session.summary}</small>
+              </span>
+              <span>{session.delivery.absorbed ? t("common.enabled") : t("common.off")}</span>
+              <span>{session.delivery.committedAfterSession ? session.delivery.commits.length : 0}</span>
+              <span>{session.delivery.dirtyAfterSession ? t("common.enabled") : t("common.off")}</span>
+              <span>{session.delivery.integration.pullRequest ? mergeStatusLabel(session.delivery.integration.pullRequest.mergeStatus, t) : t("common.notAvailable")}</span>
+              <span>{ciStatusLabel(session.delivery.integration.ci.status, t)}</span>
+              <span>{session.delivery.integration.issues.map((issue) => issue.key).join(", ") || t("common.notAvailable")}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    </main>
   );
 }
 
@@ -1522,6 +1799,61 @@ function DetailPanel({
             <span key={reason}>{t(valueReasonKeys[reason])}</span>
           ))}
         </div>
+      </section>
+
+      <section className="detail-section delivery-detail-section">
+        <h3>{t("deliveryReview.title")}</h3>
+        <div className="delivery-state-row">
+          <button
+            className={session.delivery.absorbed ? "active" : ""}
+            onClick={() => onPatch(session, { absorbed: !session.delivery.absorbed })}
+          >
+            <Check size={15} />
+            {session.delivery.absorbed ? t("deliveryReview.absorbed") : t("deliveryReview.markAbsorbed")}
+          </button>
+          <span>{Math.round(session.delivery.confidence * 100)}% {t("deliveryReview.confidence")}</span>
+        </div>
+        <dl className="detail-stats">
+          <div>
+            <dt>{t("deliveryReview.committed")}</dt>
+            <dd>{session.delivery.committedAfterSession ? session.delivery.commits.length : 0}</dd>
+          </div>
+          <div>
+            <dt>{t("deliveryReview.dirty")}</dt>
+            <dd>{session.delivery.dirtyAfterSession ? t("common.enabled") : t("common.off")}</dd>
+          </div>
+          <div>
+            <dt>{t("deliveryReview.tests")}</dt>
+            <dd>{session.delivery.testCommands.length}</dd>
+          </div>
+          <div>
+            <dt>{t("deliveryReview.ciSignals")}</dt>
+            <dd>{ciStatusLabel(session.delivery.integration.ci.status, t)}</dd>
+          </div>
+        </dl>
+        {session.delivery.diffSummary && <p className="delivery-summary">{session.delivery.diffSummary}</p>}
+        <div className="delivery-link-list">
+          {session.delivery.integration.pullRequest && (
+            <span>
+              {t("deliveryReview.prLinked")}: {session.delivery.integration.pullRequest.url ?? t("deliveryReview.unknownRemote")} · {mergeStatusLabel(session.delivery.integration.pullRequest.mergeStatus, t)}
+            </span>
+          )}
+          {session.delivery.integration.issues.length > 0 && (
+            <span>
+              {t("deliveryReview.issues")}: {session.delivery.integration.issues.map((issue) => issue.key).join(", ")}
+            </span>
+          )}
+          <span>
+            {t("deliveryReview.reviewComments")}: {session.delivery.integration.reviewCommentCount ?? t("deliveryReview.unknownRemote")}
+          </span>
+        </div>
+        {session.delivery.testCommands.length > 0 && (
+          <div className="file-list command-list">
+            {session.delivery.testCommands.slice(0, 5).map((command) => (
+              <span key={command.command}>{command.command} · {command.status}</span>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="detail-section">
@@ -1915,6 +2247,12 @@ export function App() {
               onRangeSelect={selectRange}
               inspector={selected || selectedOverlap || selectedRange ? detailPanel : undefined}
             />
+          )}
+          {view === "operating" && (
+            <OperatingReviewView ledger={ledger} onSelect={(session) => {
+              selectSession(session);
+              setView("inbox");
+            }} />
           )}
           {view === "report" && (
             <ReportView

@@ -40,6 +40,23 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     sourceFile: "",
     gitBranch: null,
     gitDirty: false,
+    delivery: {
+      diffSummary: "",
+      changedFiles: [],
+      commits: [],
+      committedAfterSession: false,
+      dirtyAfterSession: false,
+      absorbed: false,
+      testCommands: [],
+      confidence: 0,
+      integration: {
+        pullRequest: null,
+        issues: [],
+        ci: { status: "not_recorded", source: "none", command: null },
+        reviewCommentCount: null,
+        attributionConfidence: 0
+      }
+    },
     ...overrides
   };
 }

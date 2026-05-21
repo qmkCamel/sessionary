@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::models::{
-    AppSettings, LanguageSetting, SessionPatch, SessionRecord, SessionSource, SessionStatus,
-    SessionValue, SourceConfig, SourceStatus, TimeFieldState,
+    AppSettings, DeliveryLink, LanguageSetting, SessionPatch, SessionRecord, SessionSource,
+    SessionStatus, SessionValue, SourceConfig, SourceStatus, TimeFieldState,
 };
 use crate::util::local_date;
 
@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   source_file TEXT NOT NULL DEFAULT '',
   git_branch TEXT,
   git_dirty INTEGER NOT NULL DEFAULT 0,
+  delivery_json TEXT NOT NULL DEFAULT '{"diffSummary":"","changedFiles":[],"commits":[],"committedAfterSession":false,"dirtyAfterSession":false,"absorbed":false,"testCommands":[],"confidence":0.0,"integration":{"pullRequest":null,"issues":[],"ci":{"status":"not_recorded","source":"none","command":null},"reviewCommentCount":null,"attributionConfidence":0.0}}',
+  delivery_absorbed_manual INTEGER NOT NULL DEFAULT 0,
   inserted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -101,6 +103,18 @@ pub fn init() -> anyhow::Result<()> {
     conn.execute_batch(SCHEMA)?;
     ensure_column(&conn, "sessions", "review_started_at", "TEXT")?;
     ensure_column(&conn, "sessions", "repair_started_at", "TEXT")?;
+    ensure_column(
+        &conn,
+        "sessions",
+        "delivery_json",
+        "TEXT NOT NULL DEFAULT '{\"diffSummary\":\"\",\"changedFiles\":[],\"commits\":[],\"committedAfterSession\":false,\"dirtyAfterSession\":false,\"absorbed\":false,\"testCommands\":[],\"confidence\":0.0,\"integration\":{\"pullRequest\":null,\"issues\":[],\"ci\":{\"status\":\"not_recorded\",\"source\":\"none\",\"command\":null},\"reviewCommentCount\":null,\"attributionConfidence\":0.0}}'",
+    )?;
+    ensure_column(
+        &conn,
+        "sessions",
+        "delivery_absorbed_manual",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_default_source_configs(&conn)?;
     Ok(())
 }
@@ -174,6 +188,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     let status_text: String = row.get("status")?;
     let changed_files_json: String = row.get("changed_files_json")?;
     let time_fields_json: String = row.get("time_fields_json")?;
+    let delivery_json: String = row.get("delivery_json")?;
 
     let mut session = SessionRecord {
         id: row.get("id")?,
@@ -207,9 +222,31 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         source_file: row.get("source_file")?,
         git_branch: row.get("git_branch")?,
         git_dirty: row.get::<_, i64>("git_dirty")? == 1,
+        delivery: parse_json(delivery_json),
     };
     session.value = SessionValue::for_session(&session);
     Ok(session)
+}
+
+fn existing_absorbed_by_id(
+    conn: &Connection,
+    sessions: &[SessionRecord],
+) -> anyhow::Result<std::collections::BTreeMap<String, bool>> {
+    let mut absorbed = std::collections::BTreeMap::new();
+    let mut statement =
+        conn.prepare("SELECT delivery_json, delivery_absorbed_manual FROM sessions WHERE id=?1")?;
+    for session in sessions {
+        let value: Option<(String, i64)> = statement
+            .query_row([session.id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        if let Some((value, _)) = value.filter(|(_, manual)| *manual == 1) {
+            absorbed.insert(
+                session.id.clone(),
+                parse_json::<DeliveryLink>(value).absorbed,
+            );
+        }
+    }
+    Ok(absorbed)
 }
 
 pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
@@ -219,6 +256,7 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
 
     let mut conn = connection()?;
     let tx = conn.transaction()?;
+    let absorbed_by_id = existing_absorbed_by_id(&tx, sessions)?;
     {
         let mut statement = tx.prepare(
             r#"
@@ -227,10 +265,10 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
               duration_seconds, user_message_count, assistant_message_count, tool_call_count,
               token_count, cost_amount, status, status_updated_at, note, confidence, changed_files_json,
               prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, repair_started_at, time_fields_json,
-              summary, source_file, git_branch, git_dirty
+              summary, source_file, git_branch, git_dirty, delivery_json
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30
+              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
             )
             ON CONFLICT(id) DO UPDATE SET
               source=excluded.source,
@@ -256,11 +294,16 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
               source_file=excluded.source_file,
               git_branch=excluded.git_branch,
               git_dirty=excluded.git_dirty,
+              delivery_json=excluded.delivery_json,
               updated_at=CURRENT_TIMESTAMP
             "#,
         )?;
 
         for session in sessions {
+            let mut delivery = session.delivery.clone();
+            if let Some(existing_absorbed) = absorbed_by_id.get(&session.id) {
+                delivery.absorbed = *existing_absorbed;
+            }
             statement.execute(params![
                 session.id,
                 session.source.as_str(),
@@ -291,7 +334,8 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
                 session.summary,
                 session.source_file,
                 session.git_branch,
-                if session.git_dirty { 1 } else { 0 }
+                if session.git_dirty { 1 } else { 0 },
+                serde_json::to_string(&delivery)?
             ])?;
         }
     }
@@ -344,6 +388,10 @@ pub fn update_session(id: &str, patch: SessionPatch) -> anyhow::Result<Option<Se
     let waiting_seconds = patch.waiting_seconds.unwrap_or(current.waiting_seconds);
     let review_seconds = patch.review_seconds.unwrap_or(current.review_seconds);
     let repair_seconds = patch.repair_seconds.unwrap_or(current.repair_seconds);
+    let mut delivery = current.delivery;
+    if let Some(absorbed) = patch.absorbed {
+        delivery.absorbed = absorbed;
+    }
 
     if patch.prompting_seconds.is_some() {
         time_fields.prompting = TimeFieldState::Manual;
@@ -364,8 +412,10 @@ pub fn update_session(id: &str, patch: SessionPatch) -> anyhow::Result<Option<Se
         UPDATE sessions SET
           status=?1, status_updated_at=?2, note=?3,
           prompting_seconds=?4, waiting_seconds=?5, review_seconds=?6, repair_seconds=?7,
-          time_fields_json=?8, updated_at=CURRENT_TIMESTAMP
-        WHERE id=?9
+          time_fields_json=?8, delivery_json=?9,
+          delivery_absorbed_manual=CASE WHEN ?10=1 THEN 1 ELSE delivery_absorbed_manual END,
+          updated_at=CURRENT_TIMESTAMP
+        WHERE id=?11
         "#,
         params![
             status.as_str(),
@@ -376,6 +426,8 @@ pub fn update_session(id: &str, patch: SessionPatch) -> anyhow::Result<Option<Se
             review_seconds,
             repair_seconds,
             serde_json::to_string(&time_fields)?,
+            serde_json::to_string(&delivery)?,
+            if patch.absorbed.is_some() { 1 } else { 0 },
             id
         ],
     )?;

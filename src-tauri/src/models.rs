@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionSource {
     Codex,
@@ -193,6 +193,7 @@ pub struct SessionRecord {
     pub source_file: String,
     pub git_branch: Option<String>,
     pub git_dirty: bool,
+    pub delivery: DeliveryLink,
 }
 
 impl SessionValue {
@@ -310,6 +311,7 @@ pub struct SessionPatch {
     pub waiting_seconds: Option<i64>,
     pub review_seconds: Option<i64>,
     pub repair_seconds: Option<i64>,
+    pub absorbed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,6 +385,264 @@ pub struct ParallelReviewSummary {
     pub insights: Vec<ParallelInsight>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestCommandStatus {
+    Unknown,
+    Passed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TestCommandRecord {
+    pub command: String,
+    pub status: TestCommandStatus,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryCommit {
+    pub hash: String,
+    pub title: String,
+    pub committed_at: String,
+    pub files: Vec<String>,
+    pub merged_to_default_branch: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkConfidence {
+    Confirmed,
+    Inferred,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeStatus {
+    Merged,
+    NotMerged,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CiStatus {
+    Passed,
+    Failed,
+    Unknown,
+    NotRecorded,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestLink {
+    pub provider: String,
+    pub number: Option<i64>,
+    pub url: Option<String>,
+    pub branch: Option<String>,
+    pub status: LinkConfidence,
+    pub merge_status: MergeStatus,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueLink {
+    pub provider: String,
+    pub key: String,
+    pub url: Option<String>,
+    pub status: LinkConfidence,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CiSignal {
+    pub status: CiStatus,
+    pub source: String,
+    pub command: Option<String>,
+}
+
+impl Default for CiSignal {
+    fn default() -> Self {
+        Self {
+            status: CiStatus::NotRecorded,
+            source: "none".to_string(),
+            command: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryIntegration {
+    pub pull_request: Option<PullRequestLink>,
+    pub issues: Vec<IssueLink>,
+    pub ci: CiSignal,
+    pub review_comment_count: Option<usize>,
+    pub attribution_confidence: f64,
+}
+
+impl Default for DeliveryIntegration {
+    fn default() -> Self {
+        Self {
+            pull_request: None,
+            issues: Vec::new(),
+            ci: CiSignal::default(),
+            review_comment_count: None,
+            attribution_confidence: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryLink {
+    pub diff_summary: String,
+    pub changed_files: Vec<String>,
+    pub commits: Vec<DeliveryCommit>,
+    pub committed_after_session: bool,
+    pub dirty_after_session: bool,
+    pub absorbed: bool,
+    pub test_commands: Vec<TestCommandRecord>,
+    pub confidence: f64,
+    pub integration: DeliveryIntegration,
+}
+
+impl Default for DeliveryLink {
+    fn default() -> Self {
+        Self {
+            diff_summary: String::new(),
+            changed_files: Vec::new(),
+            commits: Vec::new(),
+            committed_after_session: false,
+            dirty_after_session: false,
+            absorbed: false,
+            test_commands: Vec::new(),
+            confidence: 0.0,
+            integration: DeliveryIntegration::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliveryInsightKind {
+    UnabsorbedOutput,
+    DirtyAfterSession,
+    MissingTests,
+    LinkedDelivery,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryInsight {
+    pub kind: DeliveryInsightKind,
+    pub severity: InsightSeverity,
+    pub count: usize,
+    pub session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryReviewSummary {
+    pub sessions_with_file_changes: usize,
+    pub sessions_with_commits: usize,
+    pub sessions_with_dirty_changes: usize,
+    pub absorbed_sessions: usize,
+    pub sessions_with_tests: usize,
+    pub sessions_with_pr: usize,
+    pub sessions_with_ci_signal: usize,
+    pub sessions_with_issues: usize,
+    pub merged_sessions: usize,
+    pub review_comment_known_sessions: usize,
+    pub insights: Vec<DeliveryInsight>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskType {
+    UiFrontend,
+    Docs,
+    Tests,
+    Backend,
+    Delivery,
+    Repair,
+    Unknown,
+}
+
+impl TaskType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskType::UiFrontend => "ui_frontend",
+            TaskType::Docs => "docs",
+            TaskType::Tests => "tests",
+            TaskType::Backend => "backend",
+            TaskType::Delivery => "delivery",
+            TaskType::Repair => "repair",
+            TaskType::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskTypeSummary {
+    pub task_type: TaskType,
+    pub session_count: usize,
+    pub successful_sessions: usize,
+    pub repair_sessions: usize,
+    pub average_value_score: f64,
+    pub recommended_source: Option<SessionSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolPerformanceSummary {
+    pub source: SessionSource,
+    pub session_count: usize,
+    pub successful_sessions: usize,
+    pub average_value_score: f64,
+    pub top_task_type: Option<TaskType>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybookKind {
+    ReusePattern,
+    ClearReviewBacklog,
+    AbsorbBeforeMoreAgents,
+    KeepParallelLimitSwitches,
+    AddTestLoop,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybookItem {
+    pub kind: PlaybookKind,
+    pub title: String,
+    pub detail: String,
+    pub source: Option<SessionSource>,
+    pub task_type: Option<TaskType>,
+    pub session_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatingReviewSummary {
+    pub total_sessions: usize,
+    pub successful_sessions: usize,
+    pub success_rate: f64,
+    pub cross_tool_source_count: usize,
+    pub cross_project_count: usize,
+    pub task_types: Vec<TaskTypeSummary>,
+    pub tool_performance: Vec<ToolPerformanceSummary>,
+    pub playbook: Vec<PlaybookItem>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DayMetrics {
@@ -406,6 +666,11 @@ pub struct DayMetrics {
     pub ai_waiting_human_overlap_seconds: i64,
     pub review_backlog_session_count: usize,
     pub context_switch_count: usize,
+    pub absorbed_session_count: usize,
+    pub committed_session_count: usize,
+    pub dirty_delivery_session_count: usize,
+    pub pr_linked_session_count: usize,
+    pub ci_signal_session_count: usize,
     pub max_concurrent_sessions: usize,
     pub max_concurrent_projects: usize,
     pub unknown_count: usize,
@@ -423,6 +688,8 @@ pub struct DayLedger {
     pub overlaps: Vec<OverlapInterval>,
     pub session_overlaps: Vec<OverlapInterval>,
     pub parallel_review: ParallelReviewSummary,
+    pub delivery_review: DeliveryReviewSummary,
+    pub operating_review: OperatingReviewSummary,
     pub source_status: Vec<SourceStatus>,
 }
 

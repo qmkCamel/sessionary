@@ -3,10 +3,14 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::analytics::{
-    build_day_ledger, build_parallel_review_summary, compute_overlaps, OverlapKind,
+    build_day_ledger, build_delivery_review_summary, build_operating_review_summary,
+    build_parallel_review_summary, compute_overlaps, OverlapKind,
 };
 use crate::db;
-use crate::models::{ReportResult, SessionRecord, SessionStatus, SessionValueCategory};
+use crate::models::{
+    DeliveryInsight, DeliveryInsightKind, PlaybookItem, ReportResult, SessionRecord, SessionStatus,
+    SessionValueCategory, TaskType,
+};
 use crate::util::week_range;
 
 fn human_time(seconds: i64) -> String {
@@ -99,6 +103,76 @@ fn insight_line(insight: &crate::models::ParallelInsight) -> String {
     }
 }
 
+fn delivery_insight_line(insight: &DeliveryInsight) -> String {
+    match insight.kind {
+        DeliveryInsightKind::UnabsorbedOutput => format!(
+            "- Unabsorbed output: {} session(s) have delivery signals but are not absorbed.",
+            insight.count
+        ),
+        DeliveryInsightKind::DirtyAfterSession => format!(
+            "- Dirty after session: {} session(s) still have local dirty changes.",
+            insight.count
+        ),
+        DeliveryInsightKind::MissingTests => format!(
+            "- Missing local test loop: {} file-changing session(s) have no recorded test command.",
+            insight.count
+        ),
+        DeliveryInsightKind::LinkedDelivery => format!(
+            "- Linked delivery: {} PR / issue attribution signal(s) found locally.",
+            insight.count
+        ),
+    }
+}
+
+fn task_type_label(task_type: TaskType) -> &'static str {
+    match task_type {
+        TaskType::UiFrontend => "UI/frontend",
+        TaskType::Docs => "docs",
+        TaskType::Tests => "tests",
+        TaskType::Backend => "backend",
+        TaskType::Delivery => "delivery",
+        TaskType::Repair => "repair",
+        TaskType::Unknown => "unknown",
+    }
+}
+
+fn playbook_line(item: &PlaybookItem) -> String {
+    format!("- {}: {}", item.title, item.detail)
+}
+
+fn delivery_session_line(session: &SessionRecord) -> String {
+    let pr = session
+        .delivery
+        .integration
+        .pull_request
+        .as_ref()
+        .and_then(|pull_request| pull_request.url.clone())
+        .unwrap_or_else(|| "no PR".to_string());
+    let issues = if session.delivery.integration.issues.is_empty() {
+        "no issue".to_string()
+    } else {
+        session
+            .delivery
+            .integration
+            .issues
+            .iter()
+            .map(|issue| issue.key.clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "- {} / {}: absorbed={}, commit={}, dirty={}, tests={}, pr={}, issues={}",
+        session.project_name,
+        session.source.as_str(),
+        session.delivery.absorbed,
+        session.delivery.committed_after_session,
+        session.delivery.dirty_after_session,
+        session.delivery.test_commands.len(),
+        pr,
+        issues
+    )
+}
+
 pub fn markdown_for(date: &str) -> anyhow::Result<String> {
     let ledger = build_day_ledger(date)?;
     let useful = ledger
@@ -183,6 +257,21 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
             human_time(ledger.parallel_review.review_backlog_seconds)
         ),
         format!(
+            "- Delivery absorbed: {}/{} sessions",
+            ledger.delivery_review.absorbed_sessions, ledger.metrics.session_count
+        ),
+        format!(
+            "- Delivery commits / dirty: {} committed, {} dirty",
+            ledger.delivery_review.sessions_with_commits,
+            ledger.delivery_review.sessions_with_dirty_changes
+        ),
+        format!(
+            "- PR / CI / Issue signals: {} PR, {} CI/local test, {} issue-linked",
+            ledger.delivery_review.sessions_with_pr,
+            ledger.delivery_review.sessions_with_ci_signal,
+            ledger.delivery_review.sessions_with_issues
+        ),
+        format!(
             "- Context switches: {} total, {} short",
             ledger.parallel_review.context_switch_count,
             ledger.parallel_review.short_context_switch_count
@@ -246,6 +335,86 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
 
     lines.extend([
         String::new(),
+        "## Delivery Review".to_string(),
+        String::new(),
+        format!(
+            "- File-changing sessions: {}",
+            ledger.delivery_review.sessions_with_file_changes
+        ),
+        format!(
+            "- Absorbed sessions: {}",
+            ledger.delivery_review.absorbed_sessions
+        ),
+        format!(
+            "- Commit signals: {} session(s)",
+            ledger.delivery_review.sessions_with_commits
+        ),
+        format!(
+            "- Dirty after session: {} session(s)",
+            ledger.delivery_review.sessions_with_dirty_changes
+        ),
+        format!(
+            "- Local test commands: {} session(s)",
+            ledger.delivery_review.sessions_with_tests
+        ),
+        format!(
+            "- Delivery Integrations: {} PR, {} issue-linked, {} CI/local test signal(s), {} merged",
+            ledger.delivery_review.sessions_with_pr,
+            ledger.delivery_review.sessions_with_issues,
+            ledger.delivery_review.sessions_with_ci_signal,
+            ledger.delivery_review.merged_sessions
+        ),
+    ]);
+    if ledger.delivery_review.insights.is_empty() {
+        lines.push("- No delivery absorption issues detected from local signals.".to_string());
+    } else {
+        lines.extend(
+            ledger
+                .delivery_review
+                .insights
+                .iter()
+                .map(delivery_insight_line),
+        );
+    }
+    lines.extend(ledger.sessions.iter().take(8).map(delivery_session_line));
+
+    lines.extend([
+        String::new(),
+        "## AI Dev Operating Review".to_string(),
+        String::new(),
+        format!(
+            "- Success rate estimated: {} ({}/{})",
+            percent(ledger.operating_review.success_rate),
+            ledger.operating_review.successful_sessions,
+            ledger.operating_review.total_sessions
+        ),
+        format!(
+            "- Cross-tool sources: {}, cross-projects: {}",
+            ledger.operating_review.cross_tool_source_count,
+            ledger.operating_review.cross_project_count
+        ),
+    ]);
+    if ledger.operating_review.task_types.is_empty() {
+        lines.push("- No task type signals yet.".to_string());
+    } else {
+        lines.extend(ledger.operating_review.task_types.iter().map(|task| {
+            format!(
+                "- {}: {} session(s), {} successful, avg score {:.0}",
+                task_type_label(task.task_type),
+                task.session_count,
+                task.successful_sessions,
+                task.average_value_score
+            )
+        }));
+    }
+    if ledger.operating_review.playbook.is_empty() {
+        lines.push("- No delegation playbook items yet.".to_string());
+    } else {
+        lines.extend(ledger.operating_review.playbook.iter().map(playbook_line));
+    }
+
+    lines.extend([
+        String::new(),
         "## Tomorrow Carry-over".to_string(),
         String::new(),
     ]);
@@ -284,6 +453,9 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
         max_project_sessions.max(max_session_sessions),
         max_projects,
     )?;
+    let delivery_review = build_delivery_review_summary(&sessions);
+    let operating_review =
+        build_operating_review_summary(&sessions, &parallel_review, &delivery_review);
 
     let project_count = sessions
         .iter()
@@ -382,6 +554,17 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
         format!("- Tool calls: {tool_call_count}"),
         format!("- Tokens: {token_count}"),
         format!("- Cost: ${cost_amount:.4}"),
+        format!(
+            "- Delivery absorbed: {}/{} sessions",
+            delivery_review.absorbed_sessions,
+            sessions.len()
+        ),
+        format!(
+            "- PR / CI / Issue signals: {} PR, {} CI/local test, {} issue-linked",
+            delivery_review.sessions_with_pr,
+            delivery_review.sessions_with_ci_signal,
+            delivery_review.sessions_with_issues
+        ),
         String::new(),
         "## Most Valuable Sessions".to_string(),
         String::new(),
@@ -436,6 +619,89 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
         lines.push("- No parallel workflow issues detected beyond current estimates.".to_string());
     } else {
         lines.extend(parallel_review.insights.iter().map(insight_line));
+    }
+
+    lines.extend([
+        String::new(),
+        "## Delivery Review".to_string(),
+        String::new(),
+        format!(
+            "- File-changing sessions: {}",
+            delivery_review.sessions_with_file_changes
+        ),
+        format!(
+            "- Absorbed sessions: {}",
+            delivery_review.absorbed_sessions
+        ),
+        format!(
+            "- Commit signals: {} session(s)",
+            delivery_review.sessions_with_commits
+        ),
+        format!(
+            "- Dirty after session: {} session(s)",
+            delivery_review.sessions_with_dirty_changes
+        ),
+        format!(
+            "- Delivery Integrations: {} PR, {} issue-linked, {} CI/local test signal(s), {} merged",
+            delivery_review.sessions_with_pr,
+            delivery_review.sessions_with_issues,
+            delivery_review.sessions_with_ci_signal,
+            delivery_review.merged_sessions
+        ),
+    ]);
+    if delivery_review.insights.is_empty() {
+        lines.push("- No delivery absorption issues detected from local signals.".to_string());
+    } else {
+        lines.extend(delivery_review.insights.iter().map(delivery_insight_line));
+    }
+    lines.extend(sessions.iter().take(10).map(delivery_session_line));
+
+    lines.extend([
+        String::new(),
+        "## AI Dev Operating Review".to_string(),
+        String::new(),
+        format!(
+            "- Success rate estimated: {} ({}/{})",
+            percent(operating_review.success_rate),
+            operating_review.successful_sessions,
+            operating_review.total_sessions
+        ),
+        format!(
+            "- Cross-tool sources: {}, cross-projects: {}",
+            operating_review.cross_tool_source_count, operating_review.cross_project_count
+        ),
+    ]);
+    if operating_review.tool_performance.is_empty() {
+        lines.push("- No tool performance signals yet.".to_string());
+    } else {
+        lines.extend(operating_review.tool_performance.iter().map(|tool| {
+            format!(
+                "- {}: {} session(s), {} successful, avg score {:.0}, top task {}",
+                tool.source.as_str(),
+                tool.session_count,
+                tool.successful_sessions,
+                tool.average_value_score,
+                tool.top_task_type.map(task_type_label).unwrap_or("unknown")
+            )
+        }));
+    }
+    if operating_review.task_types.is_empty() {
+        lines.push("- No task type signals yet.".to_string());
+    } else {
+        lines.extend(operating_review.task_types.iter().map(|task| {
+            format!(
+                "- {}: {} session(s), {} successful, avg score {:.0}",
+                task_type_label(task.task_type),
+                task.session_count,
+                task.successful_sessions,
+                task.average_value_score
+            )
+        }));
+    }
+    if operating_review.playbook.is_empty() {
+        lines.push("- No delegation playbook items yet.".to_string());
+    } else {
+        lines.extend(operating_review.playbook.iter().map(playbook_line));
     }
     lines.push(String::new());
 
@@ -517,6 +783,7 @@ mod tests {
             source_file: String::new(),
             git_branch: None,
             git_dirty: false,
+            delivery: Default::default(),
         };
         record.value = SessionValue::for_session(&record);
         record

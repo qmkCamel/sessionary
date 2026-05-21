@@ -8,8 +8,9 @@ Sessionary turns scattered local AI coding logs into a daily ledger: what you
 worked on, which sessions ran, where work overlapped, and which sessions still
 need review, repair, or follow-up.
 
-> Status: v0.3 local MVP. The app now covers local session value review,
-> human-time correction, daily/weekly reports, and parallel workflow review.
+> Status: v1.0 local operating review. The app now covers local session value
+> review, human-time correction, parallel workflow review, lightweight delivery
+> linkage, PR/CI/issue attribution, and AI delegation playbooks.
 > Packaged releases, signing, auto-update, and team features are not ready yet.
 
 ## Screenshots
@@ -31,6 +32,11 @@ need review, repair, or follow-up.
   calls, token use, cost, and human repair time.
 - Reviews whether parallel work actually helped, including overlap, review
   backlog, and context-switching signals.
+- Links sessions to local delivery signals such as changed files, dirty
+  changes, commit candidates, absorbed status, test commands, PR candidates,
+  CI/local test signals, and issue keys.
+- Builds an AI Dev Operating Review with task-type success rates, tool
+  performance, and a personal delegation playbook.
 - Lets you annotate session status, notes, review time, and repair time,
   including lightweight review and repair timers.
 - Generates editable daily and weekly reports that can be copied or exported
@@ -110,6 +116,8 @@ npm test
 - Session Inbox with filters, keyboard cleanup, status annotation, brief auto-advance, notes, and manual time correction.
 - Project Timeline with project tracks, session blocks, overlap bands, 15m / 30m / 60m zoom, drag selection, and overlap summaries.
 - Daily Report generation, editing, clipboard copy, and local Markdown export.
+- Weekly AI Dev Operating Review with delivery absorption, PR/CI/issue
+  attribution, task-type success rates, and playbook suggestions.
 - Rust parsers for Codex JSONL and Claude Code JSONL.
 - Claude Code parser fixture coverage for local project JSONL and OpenTelemetry-style JSONL.
 - Local SQLite persistence and annotation preservation across rescans.

@@ -73,6 +73,7 @@ export interface SessionRecord {
   sourceFile: string;
   gitBranch: string | null;
   gitDirty: boolean;
+  delivery: DeliveryLink;
 }
 
 export interface ProjectSummary {
@@ -129,6 +130,150 @@ export interface ParallelReviewSummary {
   insights: ParallelInsight[];
 }
 
+export type TestCommandStatus = "unknown" | "passed" | "failed";
+
+export interface TestCommandRecord {
+  command: string;
+  status: TestCommandStatus;
+  source: string;
+}
+
+export interface DeliveryCommit {
+  hash: string;
+  title: string;
+  committedAt: string;
+  files: string[];
+  mergedToDefaultBranch: boolean | null;
+}
+
+export type LinkConfidence = "confirmed" | "inferred" | "unknown";
+export type MergeStatus = "merged" | "not_merged" | "unknown";
+export type CiStatus = "passed" | "failed" | "unknown" | "not_recorded";
+
+export interface PullRequestLink {
+  provider: string;
+  number: number | null;
+  url: string | null;
+  branch: string | null;
+  status: LinkConfidence;
+  mergeStatus: MergeStatus;
+  source: string;
+}
+
+export interface IssueLink {
+  provider: string;
+  key: string;
+  url: string | null;
+  status: LinkConfidence;
+  source: string;
+}
+
+export interface CiSignal {
+  status: CiStatus;
+  source: string;
+  command: string | null;
+}
+
+export interface DeliveryIntegration {
+  pullRequest: PullRequestLink | null;
+  issues: IssueLink[];
+  ci: CiSignal;
+  reviewCommentCount: number | null;
+  attributionConfidence: number;
+}
+
+export interface DeliveryLink {
+  diffSummary: string;
+  changedFiles: string[];
+  commits: DeliveryCommit[];
+  committedAfterSession: boolean;
+  dirtyAfterSession: boolean;
+  absorbed: boolean;
+  testCommands: TestCommandRecord[];
+  confidence: number;
+  integration: DeliveryIntegration;
+}
+
+export type DeliveryInsightKind =
+  | "unabsorbed_output"
+  | "dirty_after_session"
+  | "missing_tests"
+  | "linked_delivery";
+
+export interface DeliveryInsight {
+  kind: DeliveryInsightKind;
+  severity: InsightSeverity;
+  count: number;
+  sessionIds: string[];
+}
+
+export interface DeliveryReviewSummary {
+  sessionsWithFileChanges: number;
+  sessionsWithCommits: number;
+  sessionsWithDirtyChanges: number;
+  absorbedSessions: number;
+  sessionsWithTests: number;
+  sessionsWithPr: number;
+  sessionsWithCiSignal: number;
+  sessionsWithIssues: number;
+  mergedSessions: number;
+  reviewCommentKnownSessions: number;
+  insights: DeliveryInsight[];
+}
+
+export type TaskType =
+  | "ui_frontend"
+  | "docs"
+  | "tests"
+  | "backend"
+  | "delivery"
+  | "repair"
+  | "unknown";
+
+export interface TaskTypeSummary {
+  taskType: TaskType;
+  sessionCount: number;
+  successfulSessions: number;
+  repairSessions: number;
+  averageValueScore: number;
+  recommendedSource: SessionSource | null;
+}
+
+export interface ToolPerformanceSummary {
+  source: SessionSource;
+  sessionCount: number;
+  successfulSessions: number;
+  averageValueScore: number;
+  topTaskType: TaskType | null;
+}
+
+export type PlaybookKind =
+  | "reuse_pattern"
+  | "clear_review_backlog"
+  | "absorb_before_more_agents"
+  | "keep_parallel_limit_switches"
+  | "add_test_loop";
+
+export interface PlaybookItem {
+  kind: PlaybookKind;
+  title: string;
+  detail: string;
+  source: SessionSource | null;
+  taskType: TaskType | null;
+  sessionIds: string[];
+}
+
+export interface OperatingReviewSummary {
+  totalSessions: number;
+  successfulSessions: number;
+  successRate: number;
+  crossToolSourceCount: number;
+  crossProjectCount: number;
+  taskTypes: TaskTypeSummary[];
+  toolPerformance: ToolPerformanceSummary[];
+  playbook: PlaybookItem[];
+}
+
 export interface DayMetrics {
   date: string;
   projectCount: number;
@@ -150,6 +295,11 @@ export interface DayMetrics {
   aiWaitingHumanOverlapSeconds: number;
   reviewBacklogSessionCount: number;
   contextSwitchCount: number;
+  absorbedSessionCount: number;
+  committedSessionCount: number;
+  dirtyDeliverySessionCount: number;
+  prLinkedSessionCount: number;
+  ciSignalSessionCount: number;
   maxConcurrentSessions: number;
   maxConcurrentProjects: number;
   unknownCount: number;
@@ -165,6 +315,8 @@ export interface DayLedger {
   overlaps: OverlapInterval[];
   sessionOverlaps: OverlapInterval[];
   parallelReview: ParallelReviewSummary;
+  deliveryReview: DeliveryReviewSummary;
+  operatingReview: OperatingReviewSummary;
   sourceStatus: SourceStatus[];
 }
 
@@ -212,4 +364,5 @@ export interface SessionPatch {
   waitingSeconds?: number;
   reviewSeconds?: number;
   repairSeconds?: number;
+  absorbed?: boolean;
 }

@@ -4,8 +4,10 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::git::git_info;
-use crate::models::{SessionRecord, SessionSource, SessionStatus, TimeFields};
+use crate::git::{delivery_link, git_info};
+use crate::models::{
+    SessionRecord, SessionSource, SessionStatus, TestCommandRecord, TestCommandStatus, TimeFields,
+};
 use crate::util::{clamp, normalize_timestamp, seconds_between, stable_id, truncate};
 
 fn json_lines(file_path: &Path) -> anyhow::Result<Vec<Value>> {
@@ -79,6 +81,70 @@ fn extract_changed_files(value: &Value) -> Vec<String> {
     files.into_iter().take(20).collect()
 }
 
+fn test_command_status(text: &str) -> TestCommandStatus {
+    let lower = text.to_lowercase();
+    if lower.contains("exit code: 0")
+        || lower.contains("exit code 0")
+        || lower.contains("test result: ok")
+        || lower.contains("tests passed")
+    {
+        TestCommandStatus::Passed
+    } else if lower.contains("exit code: 1")
+        || lower.contains("exit code 1")
+        || lower.contains("test result: failed")
+        || lower.contains("tests failed")
+    {
+        TestCommandStatus::Failed
+    } else {
+        TestCommandStatus::Unknown
+    }
+}
+
+fn looks_like_test_command(command: &str) -> bool {
+    Regex::new(
+        r"(?i)\b((npm|pnpm|yarn|bun)\s+(run\s+)?(test|build|typecheck|lint)\b|cargo\s+(test|clippy|fmt)\b|pytest\b|go\s+test\b|make\s+(test|check|lint)\b)",
+    )
+    .expect("valid regex")
+    .is_match(command)
+}
+
+fn extract_test_commands(value: &Value) -> Vec<TestCommandRecord> {
+    let mut strings = Vec::new();
+    strings_in(value, &mut strings);
+    let command_regex = Regex::new(
+        r"(?im)\b((?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|lint)[^\n;&|]*|cargo\s+(?:test|clippy|fmt)[^\n;&|]*|pytest[^\n;&|]*|go\s+test[^\n;&|]*|make\s+(?:test|check|lint)[^\n;&|]*)",
+    )
+    .expect("valid regex");
+    let mut commands = std::collections::BTreeMap::<String, TestCommandStatus>::new();
+
+    for text in strings {
+        let status = test_command_status(&text);
+        for capture in command_regex.captures_iter(&text) {
+            let command = capture[1].split_whitespace().collect::<Vec<_>>().join(" ");
+            if looks_like_test_command(&command) {
+                commands
+                    .entry(truncate(&command, 160))
+                    .and_modify(|existing| {
+                        if *existing == TestCommandStatus::Unknown {
+                            *existing = status;
+                        }
+                    })
+                    .or_insert(status);
+            }
+        }
+    }
+
+    commands
+        .into_iter()
+        .take(20)
+        .map(|(command, status)| TestCommandRecord {
+            command,
+            status,
+            source: "codex_log".to_string(),
+        })
+        .collect()
+}
+
 fn token_total(payload: &Value) -> Option<i64> {
     payload
         .get("info")
@@ -128,8 +194,10 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     let mut cost_amount: Option<f64> = None;
     let mut timestamps = Vec::new();
     let mut changed_files = BTreeSet::new();
+    let mut test_commands = Vec::<TestCommandRecord>::new();
 
     for item in items {
+        test_commands.extend(extract_test_commands(&item));
         if let Some(timestamp) = item
             .get("timestamp")
             .and_then(Value::as_str)
@@ -261,6 +329,18 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     for file in &git.changed_files {
         changed_files.insert(file.clone());
     }
+    test_commands.sort_by(|left, right| left.command.cmp(&right.command));
+    test_commands.dedup_by(|left, right| left.command == right.command);
+    let changed_files = changed_files.into_iter().take(30).collect::<Vec<_>>();
+    let delivery = delivery_link(
+        &cwd_path,
+        &started_at,
+        ended_at.as_deref(),
+        &changed_files,
+        test_commands,
+        &first_user_message,
+        "",
+    );
 
     Ok(Some(SessionRecord {
         id: format!("codex:{source_session_id}"),
@@ -285,7 +365,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
         status_updated_at: None,
         note: String::new(),
         confidence: if cwd_path.exists() { 0.90 } else { 0.72 },
-        changed_files: changed_files.into_iter().take(30).collect(),
+        changed_files: delivery.changed_files.iter().take(30).cloned().collect(),
         prompting_seconds,
         waiting_seconds,
         review_seconds,
@@ -298,6 +378,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
         source_file: file_path.display().to_string(),
         git_branch: git.branch,
         git_dirty: git.dirty,
+        delivery,
     }))
 }
 

@@ -284,6 +284,12 @@ nav button:hover,
   gap: 12px;
 }
 
+.delivery-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .insight-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1102,6 +1108,173 @@ button.project-table-row {
   text-overflow: ellipsis;
 }
 
+.delivery-detail-section {
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.delivery-state-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.delivery-state-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.delivery-state-row button.active {
+  border-color: rgba(47, 119, 112, 0.42);
+  background: #eef6f2;
+}
+
+.delivery-summary {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.delivery-link-list {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.delivery-link-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.command-list span {
+  border-radius: 7px;
+  font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+}
+
+.operating-workspace {
+  gap: 18px;
+}
+
+.operating-metrics {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.operating-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.playbook-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.playbook-card {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  min-height: 108px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.playbook-card span,
+.playbook-card small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.playbook-card span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.operating-table,
+.delivery-table {
+  display: grid;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: auto;
+  background: #fff;
+}
+
+.operating-table-row,
+.delivery-table-row {
+  width: 100%;
+  display: grid;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: #fff;
+  text-align: left;
+}
+
+.operating-table-row {
+  grid-template-columns: minmax(120px, 1fr) 80px 90px 90px minmax(110px, 1fr);
+}
+
+.delivery-table-row {
+  grid-template-columns: minmax(240px, 1.5fr) 90px 90px 90px 110px 110px minmax(120px, 1fr);
+}
+
+button.delivery-table-row {
+  cursor: pointer;
+}
+
+.operating-table-row:first-child,
+.delivery-table-row:first-child {
+  border-top: 0;
+}
+
+.operating-table-row.table-head,
+.delivery-table-row.table-head {
+  min-height: 38px;
+  background: #f8faf6;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.delivery-table-row span,
+.operating-table-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.delivery-table-row strong,
+.delivery-table-row small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .detail-section textarea {
   width: 100%;
   min-height: 84px;
@@ -1319,23 +1492,34 @@ button.project-table-row {
   }
 
   .parallel-strip,
+  .delivery-strip,
   .insight-grid,
   .parallel-review-stats,
   .insight-list,
-  .compact-overlap-list {
+  .compact-overlap-list,
+  .operating-metrics,
+  .playbook-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .today-primary-grid {
+  .today-primary-grid,
+  .operating-grid {
     grid-template-columns: 1fr;
   }
 
-  .project-table {
+  .project-table,
+  .delivery-table,
+  .operating-table {
     overflow-x: auto;
   }
 
-  .project-table-row {
+  .project-table-row,
+  .delivery-table-row {
     min-width: 760px;
+  }
+
+  .operating-table-row {
+    min-width: 560px;
   }
 
   .inbox-card {
@@ -1396,10 +1580,13 @@ button.project-table-row {
   }
 
   .parallel-strip,
+  .delivery-strip,
   .insight-grid,
   .parallel-review-stats,
   .insight-list,
-  .compact-overlap-list {
+  .compact-overlap-list,
+  .operating-metrics,
+  .playbook-list {
     grid-template-columns: 1fr;
   }
 

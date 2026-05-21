@@ -3,8 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::git::git_info;
-use crate::models::{SessionRecord, SessionSource, SessionStatus, TimeFields};
+use crate::git::{delivery_link, git_info};
+use crate::models::{
+    SessionRecord, SessionSource, SessionStatus, TestCommandRecord, TestCommandStatus, TimeFields,
+};
 use crate::util::{clamp, normalize_timestamp, seconds_between, stable_id, truncate};
 
 fn timestamp_of(event: &Value) -> Option<String> {
@@ -171,6 +173,76 @@ fn file_hints(event: &Value) -> Vec<String> {
     files
 }
 
+fn strings_in(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) => output.push(text.clone()),
+        Value::Array(items) => {
+            for item in items {
+                strings_in(item, output);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values() {
+                strings_in(item, output);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn test_command_status(text: &str) -> TestCommandStatus {
+    let lower = text.to_lowercase();
+    if lower.contains("exit code: 0")
+        || lower.contains("exit code 0")
+        || lower.contains("test result: ok")
+        || lower.contains("tests passed")
+    {
+        TestCommandStatus::Passed
+    } else if lower.contains("exit code: 1")
+        || lower.contains("exit code 1")
+        || lower.contains("test result: failed")
+        || lower.contains("tests failed")
+    {
+        TestCommandStatus::Failed
+    } else {
+        TestCommandStatus::Unknown
+    }
+}
+
+fn extract_test_commands(value: &Value) -> Vec<TestCommandRecord> {
+    let mut strings = Vec::new();
+    strings_in(value, &mut strings);
+    let command_regex = regex::Regex::new(
+        r"(?im)\b((?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|lint)[^\n;&|]*|cargo\s+(?:test|clippy|fmt)[^\n;&|]*|pytest[^\n;&|]*|go\s+test[^\n;&|]*|make\s+(?:test|check|lint)[^\n;&|]*)",
+    )
+    .expect("valid regex");
+    let mut commands = BTreeMap::<String, TestCommandStatus>::new();
+    for text in strings {
+        let status = test_command_status(&text);
+        for capture in command_regex.captures_iter(&text) {
+            let command = capture[1].split_whitespace().collect::<Vec<_>>().join(" ");
+            commands
+                .entry(truncate(&command, 160))
+                .and_modify(|existing| {
+                    if *existing == TestCommandStatus::Unknown {
+                        *existing = status;
+                    }
+                })
+                .or_insert(status);
+        }
+    }
+
+    commands
+        .into_iter()
+        .take(20)
+        .map(|(command, status)| TestCommandRecord {
+            command,
+            status,
+            source: "claude_log".to_string(),
+        })
+        .collect()
+}
+
 fn project_from_claude_path(file_path: &Path) -> PathBuf {
     let components = file_path
         .components()
@@ -243,8 +315,10 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
         let mut token_count = 0_i64;
         let mut cost_amount = 0.0_f64;
         let mut changed_files = BTreeSet::new();
+        let mut test_commands = Vec::<TestCommandRecord>::new();
 
         for event in &group {
+            test_commands.extend(extract_test_commands(event));
             if let Some(path) = event
                 .get("cwd")
                 .or_else(|| event.get("projectPath"))
@@ -306,6 +380,18 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
         for file in &git.changed_files {
             changed_files.insert(file.clone());
         }
+        test_commands.sort_by(|left, right| left.command.cmp(&right.command));
+        test_commands.dedup_by(|left, right| left.command == right.command);
+        let changed_files = changed_files.into_iter().take(30).collect::<Vec<_>>();
+        let delivery = delivery_link(
+            &cwd_path,
+            &started_at,
+            ended_at.as_deref(),
+            &changed_files,
+            test_commands,
+            &first_user_message,
+            "",
+        );
 
         sessions.push(SessionRecord {
             id: format!("claude:{source_session_id}"),
@@ -326,7 +412,7 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
             status_updated_at: None,
             note: String::new(),
             confidence: if cwd_path.exists() { 0.84 } else { 0.65 },
-            changed_files: changed_files.into_iter().take(30).collect(),
+            changed_files: delivery.changed_files.iter().take(30).cloned().collect(),
             prompting_seconds,
             waiting_seconds,
             review_seconds,
@@ -339,6 +425,7 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
             source_file: file_path.display().to_string(),
             git_branch: git.branch,
             git_dirty: git.dirty,
+            delivery,
         });
     }
 

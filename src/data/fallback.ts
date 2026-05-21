@@ -2,9 +2,14 @@ import type {
   AppSettings,
   DayLedger,
   DayMetrics,
+  DeliveryInsight,
+  DeliveryLink,
+  DeliveryReviewSummary,
+  OperatingReviewSummary,
   OverlapInterval,
   ParallelInsight,
   ParallelReviewSummary,
+  PlaybookItem,
   ProjectSummary,
   ReportResult,
   ScanResult,
@@ -29,6 +34,74 @@ let settings: AppSettings = {
   ],
   projectRoots: ["/Users/alex/work/sessionary", "/Users/alex/work/marker"]
 };
+
+function deliveryFixture({
+  files,
+  diffSummary,
+  committed,
+  dirty,
+  absorbed,
+  tests = [],
+  prUrl = null,
+  issueKeys = [],
+  merged = false
+}: {
+  files: string[];
+  diffSummary: string;
+  committed: boolean;
+  dirty: boolean;
+  absorbed: boolean;
+  tests?: Array<[string, "unknown" | "passed" | "failed"]>;
+  prUrl?: string | null;
+  issueKeys?: string[];
+  merged?: boolean;
+}): DeliveryLink {
+  return {
+    diffSummary,
+    changedFiles: files,
+    commits: committed
+      ? [
+          {
+            hash: "76e0a9e",
+            title: issueKeys.length > 0 ? `${issueKeys[0]} absorb session output (#42)` : "Absorb AI session output (#42)",
+            committedAt: `${fallbackDate}T14:35:00+08:00`,
+            files,
+            mergedToDefaultBranch: merged
+          }
+        ]
+      : [],
+    committedAfterSession: committed,
+    dirtyAfterSession: dirty,
+    absorbed,
+    testCommands: tests.map(([command, status]) => ({ command, status, source: "fallback_log" })),
+    confidence: committed ? 0.82 : dirty || files.length > 0 ? 0.54 : 0.2,
+    integration: {
+      pullRequest: prUrl
+        ? {
+            provider: "github",
+            number: 42,
+            url: prUrl,
+            branch: "feature/session-review",
+            status: "inferred",
+            mergeStatus: merged ? "merged" : "not_merged",
+            source: "local_git"
+          }
+        : null,
+      issues: issueKeys.map((key) => ({
+        provider: key.startsWith("#") ? "github" : "linear_or_jira",
+        key,
+        url: key.startsWith("#") ? `https://github.com/qmkCamel/sessionary/issues/${key.slice(1)}` : null,
+        status: "inferred",
+        source: "local_text"
+      })),
+      ci: tests.length > 0
+        ? { status: tests.some(([, status]) => status === "failed") ? "failed" : tests.some(([, status]) => status === "passed") ? "passed" : "unknown", source: "fallback_log", command: tests[0][0] }
+        : { status: "not_recorded", source: "none", command: null },
+      reviewCommentCount: null,
+      attributionConfidence: prUrl || issueKeys.length > 0 ? 0.72 : tests.length > 0 ? 0.46 : 0.2
+    }
+  };
+}
 
 let sessions: SessionRecord[] = [
   {
@@ -67,7 +140,15 @@ let sessions: SessionRecord[] = [
     summary: "Shaped Sessionary into a local-first AI coding session inbox",
     sourceFile: "~/.codex/sessions/2026/05/19/sessionary.jsonl",
     gitBranch: "main",
-    gitDirty: true
+    gitDirty: true,
+    delivery: deliveryFixture({
+      files: ["docs/product-interaction-design.md", "docs/technical-architecture.md", "src/App.tsx"],
+      diffSummary: "3 dirty file(s): docs/product-interaction-design.md, docs/technical-architecture.md, src/App.tsx. Diff: 3 files changed, 240 insertions(+), 42 deletions(-)",
+      committed: false,
+      dirty: true,
+      absorbed: false,
+      tests: [["npm run typecheck", "passed"], ["npm test", "unknown"]]
+    })
   },
   {
     id: "fallback-claude-marker-1",
@@ -105,7 +186,18 @@ let sessions: SessionRecord[] = [
     summary: "Continued Marker Today flow implementation and roadmap sync",
     sourceFile: "~/.claude/projects/marker/session.jsonl",
     gitBranch: "feature/ios-v1",
-    gitDirty: false
+    gitDirty: false,
+    delivery: deliveryFixture({
+      files: ["PRODUCT_TODO.md", "Marker/Views/TodayView.swift"],
+      diffSummary: "1 commit near session window. Working tree clean.",
+      committed: true,
+      dirty: false,
+      absorbed: true,
+      tests: [["xcodebuild test", "unknown"]],
+      prUrl: "https://github.com/qmkCamel/marker/pull/42",
+      issueKeys: ["MARKER-12"],
+      merged: false
+    })
   },
   {
     id: "fallback-codex-peoplelens-1",
@@ -143,7 +235,16 @@ let sessions: SessionRecord[] = [
     summary: "Patched browser storage adapter and side panel persistence behavior",
     sourceFile: "~/.codex/sessions/2026/05/19/peoplelens.jsonl",
     gitBranch: "add-storage-adapter",
-    gitDirty: true
+    gitDirty: true,
+    delivery: deliveryFixture({
+      files: ["src/storage/adapter.ts", "src/sidePanel/App.tsx"],
+      diffSummary: "2 dirty file(s): src/storage/adapter.ts, src/sidePanel/App.tsx. Diff: 2 files changed, 88 insertions(+), 18 deletions(-)",
+      committed: false,
+      dirty: true,
+      absorbed: false,
+      tests: [["npm test -- storage", "failed"]],
+      issueKeys: ["PL-7"]
+    })
   }
 ];
 
@@ -297,7 +398,167 @@ function parallelSummaryFor(currentSessions: SessionRecord[], projectOverlaps: O
   };
 }
 
-function metricsFor(date: string, currentSessions: SessionRecord[], parallelReview: ParallelReviewSummary): DayMetrics {
+function deliverySummaryFor(currentSessions: SessionRecord[]): DeliveryReviewSummary {
+  const sessionsWithFileChanges = currentSessions.filter((session) => session.delivery.changedFiles.length > 0 || session.changedFiles.length > 0).length;
+  const sessionsWithCommits = currentSessions.filter((session) => session.delivery.committedAfterSession).length;
+  const sessionsWithDirtyChanges = currentSessions.filter((session) => session.delivery.dirtyAfterSession || session.gitDirty).length;
+  const absorbedSessions = currentSessions.filter((session) => session.delivery.absorbed).length;
+  const sessionsWithTests = currentSessions.filter((session) => session.delivery.testCommands.length > 0).length;
+  const sessionsWithPr = currentSessions.filter((session) => session.delivery.integration.pullRequest).length;
+  const sessionsWithCiSignal = currentSessions.filter((session) => session.delivery.integration.ci.status !== "not_recorded").length;
+  const sessionsWithIssues = currentSessions.filter((session) => session.delivery.integration.issues.length > 0).length;
+  const mergedSessions = currentSessions.filter((session) =>
+    session.delivery.integration.pullRequest?.mergeStatus === "merged" ||
+    session.delivery.commits.some((commit) => commit.mergedToDefaultBranch)
+  ).length;
+  const insights: DeliveryInsight[] = [];
+  const unabsorbed = currentSessions.filter((session) =>
+    (session.delivery.changedFiles.length > 0 || session.delivery.committedAfterSession) && !session.delivery.absorbed
+  );
+  if (unabsorbed.length > 0) {
+    insights.push({ kind: "unabsorbed_output", severity: "warning", count: unabsorbed.length, sessionIds: unabsorbed.map((session) => session.id) });
+  }
+  const dirty = currentSessions.filter((session) => session.delivery.dirtyAfterSession || session.gitDirty);
+  if (dirty.length > 0) {
+    insights.push({ kind: "dirty_after_session", severity: "warning", count: dirty.length, sessionIds: dirty.map((session) => session.id) });
+  }
+  const missingTests = currentSessions.filter((session) => session.delivery.changedFiles.length > 0 && session.delivery.testCommands.length === 0);
+  if (missingTests.length > 0) {
+    insights.push({ kind: "missing_tests", severity: "info", count: missingTests.length, sessionIds: missingTests.map((session) => session.id) });
+  }
+  const linked = currentSessions.filter((session) => session.delivery.integration.pullRequest || session.delivery.integration.issues.length > 0);
+  if (linked.length > 0) {
+    insights.push({ kind: "linked_delivery", severity: "info", count: linked.length, sessionIds: linked.map((session) => session.id) });
+  }
+
+  return {
+    sessionsWithFileChanges,
+    sessionsWithCommits,
+    sessionsWithDirtyChanges,
+    absorbedSessions,
+    sessionsWithTests,
+    sessionsWithPr,
+    sessionsWithCiSignal,
+    sessionsWithIssues,
+    mergedSessions,
+    reviewCommentKnownSessions: currentSessions.filter((session) => session.delivery.integration.reviewCommentCount != null).length,
+    insights
+  };
+}
+
+function taskTypeFor(session: SessionRecord): OperatingReviewSummary["taskTypes"][number]["taskType"] {
+  const text = `${session.summary} ${session.note} ${session.gitBranch ?? ""} ${session.delivery.testCommands.map((command) => command.command).join(" ")}`.toLowerCase();
+  const files = [...session.delivery.changedFiles, ...session.changedFiles].map((file) => file.toLowerCase());
+  if (session.status === "needs_repair" || session.repairSeconds > 0 || /repair|bug|fix|failed/.test(text)) return "repair";
+  if (files.some((file) => file.includes("test") || file.includes("spec")) || /test|typecheck/.test(text)) return "tests";
+  if (files.some((file) => file.endsWith(".md") || file.includes("docs/") || file.includes("roadmap")) || /docs|roadmap/.test(text)) return "docs";
+  if (files.some((file) => file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".css") || file.includes("views/")) || /ui|frontend|layout/.test(text)) return "ui_frontend";
+  if (/pr|ci|commit|release/.test(text) || files.some((file) => file.includes(".github/") || file.includes("workflow"))) return "delivery";
+  if (files.some((file) => file.endsWith(".rs") || file.endsWith(".sql") || file.includes("src-tauri") || file.includes("api"))) return "backend";
+  return "unknown";
+}
+
+function successful(session: SessionRecord) {
+  return session.status === "useful" || session.status === "repaired" || session.value.category === "high_value" || session.value.category === "mixed_value";
+}
+
+function operatingSummaryFor(
+  currentSessions: SessionRecord[],
+  parallelReview: ParallelReviewSummary,
+  deliveryReview: DeliveryReviewSummary
+): OperatingReviewSummary {
+  const totalSessions = currentSessions.length;
+  const successfulSessions = currentSessions.filter(successful).length;
+  const taskTypes = [...new Set(currentSessions.map(taskTypeFor))].map((taskType) => {
+    const bucket = currentSessions.filter((session) => taskTypeFor(session) === taskType);
+    const bySource = [...new Set(bucket.map((session) => session.source))]
+      .map((source) => ({
+        source,
+        wins: bucket.filter((session) => session.source === source && successful(session)).length,
+        score: bucket.filter((session) => session.source === source).reduce((total, session) => total + session.value.score, 0)
+      }))
+      .sort((left, right) => right.wins - left.wins || right.score - left.score);
+    return {
+      taskType,
+      sessionCount: bucket.length,
+      successfulSessions: bucket.filter(successful).length,
+      repairSessions: bucket.filter((session) => session.status === "needs_repair" || session.status === "repaired" || session.repairSeconds > 0).length,
+      averageValueScore: bucket.reduce((total, session) => total + session.value.score, 0) / Math.max(1, bucket.length),
+      recommendedSource: bySource[0]?.source ?? null
+    };
+  });
+  const toolPerformance = [...new Set(currentSessions.map((session) => session.source))].map((source) => {
+    const bucket = currentSessions.filter((session) => session.source === source);
+    const topTaskType = [...new Set(bucket.map(taskTypeFor))]
+      .map((taskType) => ({ taskType, count: bucket.filter((session) => taskTypeFor(session) === taskType).length }))
+      .sort((left, right) => right.count - left.count)[0]?.taskType ?? null;
+    return {
+      source,
+      sessionCount: bucket.length,
+      successfulSessions: bucket.filter(successful).length,
+      averageValueScore: bucket.reduce((total, session) => total + session.value.score, 0) / Math.max(1, bucket.length),
+      topTaskType
+    };
+  });
+  const playbook: PlaybookItem[] = [];
+  const reusable = taskTypes.find((task) => task.successfulSessions > 0 && task.averageValueScore >= 55);
+  if (reusable) {
+    playbook.push({
+      kind: "reuse_pattern",
+      title: `Reuse ${reusable.recommendedSource ?? "AI"} for ${reusable.taskType}`,
+      detail: "This local pattern produced solid value in the current review window.",
+      source: reusable.recommendedSource,
+      taskType: reusable.taskType,
+      sessionIds: currentSessions.filter((session) => taskTypeFor(session) === reusable.taskType).map((session) => session.id)
+    });
+  }
+  if (parallelReview.reviewBacklogSessionCount >= 2) {
+    playbook.push({
+      kind: "clear_review_backlog",
+      title: "Clear review backlog before opening more agents",
+      detail: "Several completed sessions are still waiting for review or repair.",
+      source: null,
+      taskType: null,
+      sessionIds: currentSessions.filter((session) => session.status === "unknown" || session.status === "needs_review" || session.status === "needs_repair").map((session) => session.id)
+    });
+  }
+  if (deliveryReview.sessionsWithDirtyChanges > 0 || deliveryReview.absorbedSessions < deliveryReview.sessionsWithFileChanges) {
+    playbook.push({
+      kind: "absorb_before_more_agents",
+      title: "Absorb or shelve delivery output before widening parallelism",
+      detail: "There are local code changes that have not fully landed in the review loop.",
+      source: null,
+      taskType: "delivery",
+      sessionIds: currentSessions.filter((session) => session.delivery.dirtyAfterSession || (!session.delivery.absorbed && session.delivery.changedFiles.length > 0)).map((session) => session.id)
+    });
+  }
+  playbook.push({
+    kind: "keep_parallel_limit_switches",
+    title: "Keep parallel agents, cap short switching",
+    detail: `${Math.round(parallelReview.parallelProjectRatio * 100)}% of active time was cross-project parallel in this sample.`,
+    source: null,
+    taskType: null,
+    sessionIds: currentSessions.map((session) => session.id)
+  });
+
+  return {
+    totalSessions,
+    successfulSessions,
+    successRate: totalSessions === 0 ? 0 : successfulSessions / totalSessions,
+    crossToolSourceCount: new Set(currentSessions.map((session) => session.source)).size,
+    crossProjectCount: new Set(currentSessions.map((session) => session.projectPath)).size,
+    taskTypes,
+    toolPerformance,
+    playbook
+  };
+}
+
+function metricsFor(
+  date: string,
+  currentSessions: SessionRecord[],
+  parallelReview: ParallelReviewSummary,
+  deliveryReview: DeliveryReviewSummary
+): DayMetrics {
   return {
     date,
     projectCount: new Set(currentSessions.map((session) => session.projectPath)).size,
@@ -319,6 +580,11 @@ function metricsFor(date: string, currentSessions: SessionRecord[], parallelRevi
     aiWaitingHumanOverlapSeconds: parallelReview.aiWaitingHumanOverlapSeconds,
     reviewBacklogSessionCount: parallelReview.reviewBacklogSessionCount,
     contextSwitchCount: parallelReview.contextSwitchCount,
+    absorbedSessionCount: deliveryReview.absorbedSessions,
+    committedSessionCount: deliveryReview.sessionsWithCommits,
+    dirtyDeliverySessionCount: deliveryReview.sessionsWithDirtyChanges,
+    prLinkedSessionCount: deliveryReview.sessionsWithPr,
+    ciSignalSessionCount: deliveryReview.sessionsWithCiSignal,
     maxConcurrentSessions: 2,
     maxConcurrentProjects: 2,
     unknownCount: currentSessions.filter((session) => session.status === "unknown").length,
@@ -335,7 +601,14 @@ export function fallbackLedger(date = fallbackDate): DayLedger {
     endedAt: session.endedAt?.replace(fallbackDate, date) ?? null,
     statusUpdatedAt: session.statusUpdatedAt?.replace(fallbackDate, date) ?? null,
     reviewStartedAt: session.reviewStartedAt?.replace(fallbackDate, date) ?? null,
-    repairStartedAt: session.repairStartedAt?.replace(fallbackDate, date) ?? null
+    repairStartedAt: session.repairStartedAt?.replace(fallbackDate, date) ?? null,
+    delivery: {
+      ...session.delivery,
+      commits: session.delivery.commits.map((commit) => ({
+        ...commit,
+        committedAt: commit.committedAt.replace(fallbackDate, date)
+      }))
+    }
   })).map(withValue);
   const datedOverlaps = clone(overlaps).map((overlap) => ({
     ...overlap,
@@ -348,14 +621,18 @@ export function fallbackLedger(date = fallbackDate): DayLedger {
     endedAt: overlap.endedAt.replace(fallbackDate, date)
   }));
   const parallelReview = parallelSummaryFor(currentSessions, datedOverlaps, datedSessionOverlaps);
+  const deliveryReview = deliverySummaryFor(currentSessions);
+  const operatingReview = operatingSummaryFor(currentSessions, parallelReview, deliveryReview);
 
   return {
-    metrics: metricsFor(date, currentSessions, parallelReview),
+    metrics: metricsFor(date, currentSessions, parallelReview, deliveryReview),
     projects: projectSummaries(currentSessions),
     sessions: currentSessions,
     overlaps: datedOverlaps,
     sessionOverlaps: datedSessionOverlaps,
     parallelReview,
+    deliveryReview,
+    operatingReview,
     sourceStatus: sourceStatusFor(currentSessions)
   };
 }
@@ -374,10 +651,15 @@ export function fallbackScan(): ScanResult {
 
 export function fallbackUpdate(id: string, patch: SessionPatch): SessionRecord {
   const current = sessions.find((session) => session.id === id) ?? sessions[0];
+  const { absorbed, ...sessionPatch } = patch;
   const next: SessionRecord = withValue({
     ...current,
-    ...patch,
+    ...sessionPatch,
     statusUpdatedAt: patch.status ? new Date().toISOString() : current.statusUpdatedAt,
+    delivery: {
+      ...current.delivery,
+      absorbed: absorbed ?? current.delivery.absorbed
+    },
     timeFields: {
       ...current.timeFields,
       prompting: patch.promptingSeconds == null ? current.timeFields.prompting : "manual",
@@ -450,6 +732,9 @@ export function fallbackReport(date = fallbackDate, locale: Locale = "en"): Repo
       `AI waiting / human review overlap estimated: ${Math.round(ledger.parallelReview.aiWaitingHumanOverlapSeconds / 60)}m`,
       `Review backlog estimated: ${ledger.parallelReview.reviewBacklogSessionCount} session(s), ${Math.round(ledger.parallelReview.reviewBacklogSeconds / 60)}m`,
       `Context switches: ${ledger.parallelReview.contextSwitchCount} total, ${ledger.parallelReview.shortContextSwitchCount} short`,
+      `Delivery absorbed: ${ledger.deliveryReview.absorbedSessions}/${ledger.metrics.sessionCount}`,
+      `Delivery commits / dirty: ${ledger.deliveryReview.sessionsWithCommits} committed, ${ledger.deliveryReview.sessionsWithDirtyChanges} dirty`,
+      `PR / CI / Issue signals: ${ledger.deliveryReview.sessionsWithPr} PR, ${ledger.deliveryReview.sessionsWithCiSignal} CI/local test, ${ledger.deliveryReview.sessionsWithIssues} issue-linked`,
       `Tool calls: ${ledger.metrics.toolCallCount}`,
       `Tokens: ${ledger.metrics.tokenCount}`,
       `Cost: $${ledger.metrics.costAmount.toFixed(4)}`,
@@ -460,6 +745,18 @@ export function fallbackReport(date = fallbackDate, locale: Locale = "en"): Repo
       `- AI waiting / human review overlap estimated: ${Math.round(ledger.parallelReview.aiWaitingHumanOverlapSeconds / 60)}m`,
       `- Review backlog estimated: ${ledger.parallelReview.reviewBacklogSessionCount} session(s), ${Math.round(ledger.parallelReview.reviewBacklogSeconds / 60)}m`,
       `- Context switches: ${ledger.parallelReview.contextSwitchCount} total, ${ledger.parallelReview.shortContextSwitchCount} short`,
+      "",
+      "## Delivery Review",
+      `- File-changing sessions: ${ledger.deliveryReview.sessionsWithFileChanges}`,
+      `- Absorbed sessions: ${ledger.deliveryReview.absorbedSessions}`,
+      `- Commit signals: ${ledger.deliveryReview.sessionsWithCommits}`,
+      `- Dirty after session: ${ledger.deliveryReview.sessionsWithDirtyChanges}`,
+      `- Delivery Integrations: ${ledger.deliveryReview.sessionsWithPr} PR, ${ledger.deliveryReview.sessionsWithIssues} issue-linked, ${ledger.deliveryReview.sessionsWithCiSignal} CI/local test signal(s), ${ledger.deliveryReview.mergedSessions} merged`,
+      "",
+      "## AI Dev Operating Review",
+      `- Success rate estimated: ${Math.round(ledger.operatingReview.successRate * 100)}% (${ledger.operatingReview.successfulSessions}/${ledger.operatingReview.totalSessions})`,
+      `- Cross-tool sources: ${ledger.operatingReview.crossToolSourceCount}, cross-projects: ${ledger.operatingReview.crossProjectCount}`,
+      ...ledger.operatingReview.playbook.map((item) => `- ${item.title}: ${item.detail}`),
       "",
       `## ${t("report.fallback.projects")}`,
       ...topProjects,
@@ -514,6 +811,8 @@ export function fallbackWeeklyReport(date = fallbackDate, locale: Locale = "en")
       `Tool calls: ${ledger.metrics.toolCallCount}`,
       `Tokens: ${ledger.metrics.tokenCount}`,
       `Cost: $${ledger.metrics.costAmount.toFixed(4)}`,
+      `Delivery absorbed: ${ledger.deliveryReview.absorbedSessions}/${ledger.metrics.sessionCount}`,
+      `PR / CI / Issue signals: ${ledger.deliveryReview.sessionsWithPr} PR, ${ledger.deliveryReview.sessionsWithCiSignal} CI/local test, ${ledger.deliveryReview.sessionsWithIssues} issue-linked`,
       "",
       "## Most Valuable Sessions",
       ...(topValue.length > 0 ? topValue.map(line) : ["- No high-value sessions marked yet."]),
@@ -528,7 +827,20 @@ export function fallbackWeeklyReport(date = fallbackDate, locale: Locale = "en")
       `- Parallel project ratio estimated: ${Math.round(ledger.parallelReview.parallelProjectRatio * 100)}%`,
       `- AI waiting / human review overlap estimated: ${Math.round(ledger.parallelReview.aiWaitingHumanOverlapSeconds / 60)}m`,
       `- Review backlog estimated: ${ledger.parallelReview.reviewBacklogSessionCount} session(s), ${Math.round(ledger.parallelReview.reviewBacklogSeconds / 60)}m`,
-      `- Context switches: ${ledger.parallelReview.contextSwitchCount} total, ${ledger.parallelReview.shortContextSwitchCount} short`
+      `- Context switches: ${ledger.parallelReview.contextSwitchCount} total, ${ledger.parallelReview.shortContextSwitchCount} short`,
+      "",
+      "## Delivery Review",
+      `- File-changing sessions: ${ledger.deliveryReview.sessionsWithFileChanges}`,
+      `- Absorbed sessions: ${ledger.deliveryReview.absorbedSessions}`,
+      `- Commit signals: ${ledger.deliveryReview.sessionsWithCommits}`,
+      `- Dirty after session: ${ledger.deliveryReview.sessionsWithDirtyChanges}`,
+      `- Delivery Integrations: ${ledger.deliveryReview.sessionsWithPr} PR, ${ledger.deliveryReview.sessionsWithIssues} issue-linked, ${ledger.deliveryReview.sessionsWithCiSignal} CI/local test signal(s), ${ledger.deliveryReview.mergedSessions} merged`,
+      "",
+      "## AI Dev Operating Review",
+      `- Success rate estimated: ${Math.round(ledger.operatingReview.successRate * 100)}% (${ledger.operatingReview.successfulSessions}/${ledger.operatingReview.totalSessions})`,
+      `- Cross-tool sources: ${ledger.operatingReview.crossToolSourceCount}, cross-projects: ${ledger.operatingReview.crossProjectCount}`,
+      ...ledger.operatingReview.toolPerformance.map((tool) => `- ${tool.source}: ${tool.sessionCount} session(s), ${tool.successfulSessions} successful, avg score ${Math.round(tool.averageValueScore)}`),
+      ...ledger.operatingReview.playbook.map((item) => `- ${item.title}: ${item.detail}`)
     ].join("\n")
   };
 }
