@@ -349,7 +349,9 @@ export interface AppSettings {
 
 export interface RemoteIntegrationConfig {
   enabled: boolean;
+  tokenSaved: boolean;
   token: string;
+  clearToken?: boolean;
 }
 
 export interface IntegrationSettings {
@@ -380,6 +382,51 @@ export interface IntegrationSyncResult {
   github: IntegrationProviderSync;
   linear: IntegrationProviderSync;
   sessionsUpdated: number;
+}
+
+export type DiagnosticLevel = "info" | "success" | "warning" | "error";
+
+export interface DiagnosticDetail {
+  level: DiagnosticLevel;
+  label: string;
+  value: string;
+}
+
+export interface ProviderDiagnostics {
+  enabled: boolean;
+  credentialPresent: boolean;
+  ok: boolean;
+  message: string;
+  details: DiagnosticDetail[];
+}
+
+export interface IntegrationDiagnosticsResult {
+  checkedAt: string;
+  github: ProviderDiagnostics;
+  linear: ProviderDiagnostics;
+}
+
+export interface BackupResult {
+  path: string;
+  bytes: number;
+  createdAt: string;
+  message: string;
+}
+
+export type ReleaseCheckStatus = "pass" | "warning" | "fail";
+
+export interface ReleaseCheck {
+  id: string;
+  label: string;
+  status: ReleaseCheckStatus;
+  detail: string;
+}
+
+export interface ReleaseReadinessResult {
+  checkedAt: string;
+  version: string;
+  buildCommand: string;
+  checks: ReleaseCheck[];
 }
 
 export interface ReportResult {

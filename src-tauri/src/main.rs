@@ -1,16 +1,19 @@
 mod analytics;
+mod backup;
+mod credentials;
 mod db;
 mod git;
 mod ingest;
 mod integrations;
 mod models;
 mod parsers;
+mod release;
 mod report;
 mod util;
 
 use models::{
-    AppSettings, DayLedger, IntegrationSyncResult, ReportResult, ScanResult, SessionPatch,
-    SessionRecord, SessionStatus,
+    AppSettings, BackupResult, DayLedger, IntegrationDiagnosticsResult, IntegrationSyncResult,
+    ReleaseReadinessResult, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus,
 };
 
 #[tauri::command]
@@ -87,6 +90,26 @@ fn sync_integrations() -> Result<IntegrationSyncResult, String> {
 }
 
 #[tauri::command]
+fn diagnose_integrations() -> Result<IntegrationDiagnosticsResult, String> {
+    integrations::diagnose_integrations().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn create_backup() -> Result<BackupResult, String> {
+    backup::create_backup().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_backup(path: String) -> Result<BackupResult, String> {
+    backup::restore_backup(&path).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_release_readiness() -> Result<ReleaseReadinessResult, String> {
+    release::get_release_readiness().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn generate_report(date: String) -> Result<ReportResult, String> {
     report::build_report(&date).map_err(|error| error.to_string())
 }
@@ -121,6 +144,10 @@ fn main() {
             get_settings,
             save_settings,
             sync_integrations,
+            diagnose_integrations,
+            create_backup,
+            restore_backup,
+            get_release_readiness,
             generate_report,
             export_report,
             generate_weekly_report,

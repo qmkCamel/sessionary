@@ -1,10 +1,26 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Locale } from "./i18n";
-import type { AppSettings, DayLedger, IntegrationSyncResult, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus } from "./shared/types";
+import type {
+  AppSettings,
+  BackupResult,
+  DayLedger,
+  IntegrationDiagnosticsResult,
+  IntegrationSyncResult,
+  ReleaseReadinessResult,
+  ReportResult,
+  ScanResult,
+  SessionPatch,
+  SessionRecord,
+  SessionStatus
+} from "./shared/types";
 import {
+  fallbackCreateBackup,
+  fallbackDiagnoseIntegrations,
   fallbackFinishRepair,
   fallbackLedger,
+  fallbackReleaseReadiness,
   fallbackReport,
+  fallbackRestoreBackup,
   fallbackScan,
   fallbackSyncIntegrations,
   fallbackSettings,
@@ -64,6 +80,22 @@ export async function saveSettings(settings: AppSettings): Promise<AppSettings> 
 
 export async function syncIntegrations(): Promise<IntegrationSyncResult> {
   return invokeOrFallback("sync_integrations", undefined, fallbackSyncIntegrations);
+}
+
+export async function diagnoseIntegrations(): Promise<IntegrationDiagnosticsResult> {
+  return invokeOrFallback("diagnose_integrations", undefined, fallbackDiagnoseIntegrations);
+}
+
+export async function createBackup(): Promise<BackupResult> {
+  return invokeOrFallback("create_backup", undefined, fallbackCreateBackup);
+}
+
+export async function restoreBackup(path: string): Promise<BackupResult> {
+  return invokeOrFallback("restore_backup", { path }, () => fallbackRestoreBackup(path));
+}
+
+export async function getReleaseReadiness(): Promise<ReleaseReadinessResult> {
+  return invokeOrFallback("get_release_readiness", undefined, fallbackReleaseReadiness);
 }
 
 export async function generateReport(date: string, locale: Locale = "en"): Promise<ReportResult> {

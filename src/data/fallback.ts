@@ -1,10 +1,12 @@
 import type {
   AppSettings,
+  BackupResult,
   DayLedger,
   DayMetrics,
   DeliveryInsight,
   DeliveryLink,
   DeliveryReviewSummary,
+  IntegrationDiagnosticsResult,
   IntegrationSyncResult,
   OperatingReviewSummary,
   OverlapInterval,
@@ -13,6 +15,7 @@ import type {
   PlaybookItem,
   ProjectSummary,
   ReportResult,
+  ReleaseReadinessResult,
   ScanResult,
   SessionPatch,
   SessionRecord,
@@ -30,8 +33,8 @@ let settings: AppSettings = {
   onboardingCompleted: true,
   language: "system",
   integrationSettings: {
-    github: { enabled: false, token: "" },
-    linear: { enabled: false, token: "" }
+    github: { enabled: false, tokenSaved: false, token: "" },
+    linear: { enabled: false, tokenSaved: false, token: "" }
   },
   sourceConfigs: [
     { source: "codex", enabled: true, paths: ["~/.codex/sessions", "~/.codex/archived_sessions"] },
@@ -717,7 +720,29 @@ export function fallbackSettings(): AppSettings {
 }
 
 export function saveFallbackSettings(nextSettings: AppSettings): AppSettings {
-  settings = clone(nextSettings);
+  settings = clone({
+    ...nextSettings,
+    integrationSettings: {
+      github: {
+        ...nextSettings.integrationSettings.github,
+        tokenSaved: nextSettings.integrationSettings.github.clearToken
+          ? false
+          : nextSettings.integrationSettings.github.tokenSaved ||
+            Boolean(nextSettings.integrationSettings.github.token),
+        token: "",
+        clearToken: false
+      },
+      linear: {
+        ...nextSettings.integrationSettings.linear,
+        tokenSaved: nextSettings.integrationSettings.linear.clearToken
+          ? false
+          : nextSettings.integrationSettings.linear.tokenSaved ||
+            Boolean(nextSettings.integrationSettings.linear.token),
+        token: "",
+        clearToken: false
+      }
+    }
+  });
   return fallbackSettings();
 }
 
@@ -764,7 +789,7 @@ export function fallbackSyncIntegrations(): IntegrationSyncResult {
     finishedAt: new Date().toISOString(),
     github: {
       enabled: settings.integrationSettings.github.enabled,
-      attempted: settings.integrationSettings.github.enabled && Boolean(settings.integrationSettings.github.token),
+      attempted: settings.integrationSettings.github.enabled && settings.integrationSettings.github.tokenSaved,
       linked: githubLinked,
       errors: 0,
       message: settings.integrationSettings.github.enabled
@@ -773,7 +798,7 @@ export function fallbackSyncIntegrations(): IntegrationSyncResult {
     },
     linear: {
       enabled: settings.integrationSettings.linear.enabled,
-      attempted: settings.integrationSettings.linear.enabled && Boolean(settings.integrationSettings.linear.token),
+      attempted: settings.integrationSettings.linear.enabled && settings.integrationSettings.linear.tokenSaved,
       linked: linearLinked,
       errors: 0,
       message: settings.integrationSettings.linear.enabled
@@ -781,6 +806,82 @@ export function fallbackSyncIntegrations(): IntegrationSyncResult {
         : "Linear disabled"
     },
     sessionsUpdated
+  };
+}
+
+export function fallbackDiagnoseIntegrations(): IntegrationDiagnosticsResult {
+  return {
+    checkedAt: new Date().toISOString(),
+    github: {
+      enabled: settings.integrationSettings.github.enabled,
+      credentialPresent: settings.integrationSettings.github.tokenSaved,
+      ok: settings.integrationSettings.github.enabled && settings.integrationSettings.github.tokenSaved,
+      message:
+        settings.integrationSettings.github.enabled && settings.integrationSettings.github.tokenSaved
+          ? "GitHub diagnostics passed"
+          : settings.integrationSettings.github.enabled
+            ? "GitHub token missing"
+            : "GitHub disabled",
+      details: [
+        {
+          level: settings.integrationSettings.github.tokenSaved ? "success" : "warning",
+          label: "Credential",
+          value: settings.integrationSettings.github.tokenSaved ? "Token saved" : "No token saved"
+        },
+        { level: "info", label: "Rate limit remaining", value: "fallback" }
+      ]
+    },
+    linear: {
+      enabled: settings.integrationSettings.linear.enabled,
+      credentialPresent: settings.integrationSettings.linear.tokenSaved,
+      ok: settings.integrationSettings.linear.enabled && settings.integrationSettings.linear.tokenSaved,
+      message:
+        settings.integrationSettings.linear.enabled && settings.integrationSettings.linear.tokenSaved
+          ? "Linear diagnostics passed"
+          : settings.integrationSettings.linear.enabled
+            ? "Linear token missing"
+            : "Linear disabled",
+      details: [
+        {
+          level: settings.integrationSettings.linear.tokenSaved ? "success" : "warning",
+          label: "Credential",
+          value: settings.integrationSettings.linear.tokenSaved ? "Token saved" : "No token saved"
+        },
+        { level: "info", label: "Issue keys", value: "2 local key(s)" }
+      ]
+    }
+  };
+}
+
+export function fallbackCreateBackup(): BackupResult {
+  return {
+    path: "/tmp/sessionary-fallback-backup.sqlite",
+    bytes: 128000,
+    createdAt: new Date().toISOString(),
+    message: "Backup created. Keychain tokens are not included."
+  };
+}
+
+export function fallbackRestoreBackup(path: string): BackupResult {
+  return {
+    path,
+    bytes: 128000,
+    createdAt: new Date().toISOString(),
+    message: "Backup restored from fallback path."
+  };
+}
+
+export function fallbackReleaseReadiness(): ReleaseReadinessResult {
+  return {
+    checkedAt: new Date().toISOString(),
+    version: "1.0.0",
+    buildCommand: "npm run tauri:build",
+    checks: [
+      { id: "version", label: "Package and Tauri versions match", status: "pass", detail: "1.0.0" },
+      { id: "bundle-active", label: "Tauri bundle is active", status: "pass", detail: "Required for npm run tauri:build" },
+      { id: "icons", label: "Bundle icons configured", status: "pass", detail: "icons/icon.png" },
+      { id: "signing", label: "Apple signing identity configured", status: "warning", detail: "Set APPLE_SIGNING_IDENTITY for signed builds" }
+    ]
   };
 }
 

@@ -1427,6 +1427,90 @@ button.delivery-table-row {
   gap: 7px;
 }
 
+.quiet-button {
+  width: max-content;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.release-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.diagnostic-grid,
+.release-check-list {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnostic-card,
+.result-box,
+.release-check {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.diagnostic-card.pass,
+.release-check.pass {
+  border-color: #9ab8aa;
+}
+
+.diagnostic-card.warning,
+.release-check.warning {
+  border-color: #d8b866;
+}
+
+.release-check.fail,
+.diagnostic-detail.error {
+  border-color: #d88f8f;
+}
+
+.diagnostic-card span,
+.result-box small,
+.release-check small,
+.diagnostic-detail {
+  color: var(--muted);
+}
+
+.diagnostic-detail.success {
+  color: #245742;
+}
+
+.diagnostic-detail.warning {
+  color: #8a6418;
+}
+
+.diagnostic-detail.error {
+  color: #8c3434;
+}
+
+.release-check {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.release-check small {
+  grid-column: 1 / -1;
+}
+
+.release-check-list code {
+  width: max-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #eef1ec;
+}
+
 .settings-actions {
   justify-content: flex-end;
 }

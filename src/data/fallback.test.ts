@@ -78,8 +78,8 @@ describe("fallback data", () => {
     const saved = saveFallbackSettings({
       ...fallbackSettings(),
       integrationSettings: {
-        github: { enabled: true, token: "ghp_demo" },
-        linear: { enabled: true, token: "lin_demo" }
+        github: { enabled: true, tokenSaved: false, token: "ghp_demo" },
+        linear: { enabled: true, tokenSaved: false, token: "lin_demo" }
       }
     });
 

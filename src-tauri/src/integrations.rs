@@ -3,10 +3,12 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
+use crate::credentials;
 use crate::db;
 use crate::models::{
-    CiSignal, CiStatus, IntegrationProviderSync, IntegrationSyncResult, IssueLink, LinkConfidence,
-    MergeStatus, PullRequestLink, RemoteIntegrationConfig, SessionRecord,
+    CiSignal, CiStatus, DiagnosticDetail, DiagnosticLevel, IntegrationDiagnosticsResult,
+    IntegrationProviderSync, IntegrationSyncResult, IssueLink, LinkConfidence, MergeStatus,
+    ProviderDiagnostics, PullRequestLink, RemoteIntegrationConfig, SessionRecord,
 };
 
 const GITHUB_API: &str = "https://api.github.com";
@@ -32,11 +34,13 @@ pub fn sync_integrations() -> anyhow::Result<IntegrationSyncResult> {
     let started_at = now_utc();
     let settings = db::get_settings()?.integration_settings;
     let mut sessions = db::all_sessions()?;
+    let github_token = credentials::get_token("github")?;
+    let linear_token = credentials::get_token("linear")?;
 
-    let github_ready = provider_ready(&settings.github);
-    let linear_ready = provider_ready(&settings.linear);
-    let mut github = provider_start(&settings.github, "GitHub");
-    let mut linear = provider_start(&settings.linear, "Linear");
+    let github_ready = provider_ready(&settings.github, github_token.as_deref());
+    let linear_ready = provider_ready(&settings.linear, linear_token.as_deref());
+    let mut github = provider_start(&settings.github, github_token.as_deref(), "GitHub");
+    let mut linear = provider_start(&settings.linear, linear_token.as_deref(), "Linear");
     let mut sessions_updated = 0;
 
     if github_ready || linear_ready {
@@ -47,11 +51,11 @@ pub fn sync_integrations() -> anyhow::Result<IntegrationSyncResult> {
             .build();
         let github_client = GitHubClient {
             agent: &agent,
-            token: settings.github.token.trim(),
+            token: github_token.as_deref().unwrap_or_default(),
         };
         let linear_client = LinearClient {
             agent: &agent,
-            token: settings.linear.token.trim(),
+            token: linear_token.as_deref().unwrap_or_default(),
         };
 
         for session in &mut sessions {
@@ -87,11 +91,33 @@ pub fn sync_integrations() -> anyhow::Result<IntegrationSyncResult> {
     })
 }
 
-fn provider_ready(config: &RemoteIntegrationConfig) -> bool {
-    config.enabled && !config.token.trim().is_empty()
+pub fn diagnose_integrations() -> anyhow::Result<IntegrationDiagnosticsResult> {
+    let settings = db::get_settings()?.integration_settings;
+    let sessions = db::all_sessions()?;
+    let github_token = credentials::get_token("github")?;
+    let linear_token = credentials::get_token("linear")?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .timeout_write(Duration::from_secs(30))
+        .build();
+
+    Ok(IntegrationDiagnosticsResult {
+        checked_at: now_utc(),
+        github: diagnose_github(&agent, &settings.github, github_token.as_deref(), &sessions),
+        linear: diagnose_linear(&agent, &settings.linear, linear_token.as_deref(), &sessions),
+    })
 }
 
-fn provider_start(config: &RemoteIntegrationConfig, label: &str) -> IntegrationProviderSync {
+fn provider_ready(config: &RemoteIntegrationConfig, token: Option<&str>) -> bool {
+    config.enabled && token.is_some_and(|token| !token.trim().is_empty())
+}
+
+fn provider_start(
+    config: &RemoteIntegrationConfig,
+    token: Option<&str>,
+    label: &str,
+) -> IntegrationProviderSync {
     if !config.enabled {
         return IntegrationProviderSync {
             enabled: false,
@@ -101,7 +127,7 @@ fn provider_start(config: &RemoteIntegrationConfig, label: &str) -> IntegrationP
             message: format!("{label} disabled"),
         };
     }
-    if config.token.trim().is_empty() {
+    if token.is_none_or(|token| token.trim().is_empty()) {
         return IntegrationProviderSync {
             enabled: true,
             attempted: false,
@@ -111,6 +137,164 @@ fn provider_start(config: &RemoteIntegrationConfig, label: &str) -> IntegrationP
         };
     }
     IntegrationProviderSync::attempted(true)
+}
+
+fn detail(
+    level: DiagnosticLevel,
+    label: impl Into<String>,
+    value: impl Into<String>,
+) -> DiagnosticDetail {
+    DiagnosticDetail {
+        level,
+        label: label.into(),
+        value: value.into(),
+    }
+}
+
+fn diagnose_github(
+    agent: &ureq::Agent,
+    config: &RemoteIntegrationConfig,
+    token: Option<&str>,
+    sessions: &[SessionRecord],
+) -> ProviderDiagnostics {
+    if !config.enabled {
+        return ProviderDiagnostics::disabled("GitHub");
+    }
+    let Some(token) = token.filter(|token| !token.trim().is_empty()) else {
+        return ProviderDiagnostics {
+            enabled: true,
+            credential_present: false,
+            ok: false,
+            message: "GitHub token missing".to_string(),
+            details: vec![detail(
+                DiagnosticLevel::Error,
+                "Credential",
+                "No GitHub token in Keychain",
+            )],
+        };
+    };
+
+    let client = GitHubClient { agent, token };
+    let mut details = Vec::new();
+    let (parsed, missing) = github_repo_counts(sessions);
+    details.push(detail(
+        DiagnosticLevel::Info,
+        "Repos parsed",
+        format!("{parsed} parsed, {missing} missing or unsupported"),
+    ));
+
+    match github_rate_limit(&client) {
+        Ok((remaining, scopes)) => {
+            details.push(detail(DiagnosticLevel::Success, "GitHub API", "reachable"));
+            details.push(detail(
+                DiagnosticLevel::Info,
+                "Rate limit remaining",
+                remaining.unwrap_or_else(|| "unknown".to_string()),
+            ));
+            details.push(detail(
+                DiagnosticLevel::Info,
+                "OAuth scopes",
+                scopes.unwrap_or_else(|| "unknown".to_string()),
+            ));
+            ProviderDiagnostics {
+                enabled: true,
+                credential_present: true,
+                ok: true,
+                message: "GitHub diagnostics passed".to_string(),
+                details,
+            }
+        }
+        Err(error) => {
+            details.push(detail(DiagnosticLevel::Error, "GitHub API", error));
+            ProviderDiagnostics {
+                enabled: true,
+                credential_present: true,
+                ok: false,
+                message: "GitHub diagnostics failed".to_string(),
+                details,
+            }
+        }
+    }
+}
+
+fn diagnose_linear(
+    agent: &ureq::Agent,
+    config: &RemoteIntegrationConfig,
+    token: Option<&str>,
+    sessions: &[SessionRecord],
+) -> ProviderDiagnostics {
+    if !config.enabled {
+        return ProviderDiagnostics::disabled("Linear");
+    }
+    let Some(token) = token.filter(|token| !token.trim().is_empty()) else {
+        return ProviderDiagnostics {
+            enabled: true,
+            credential_present: false,
+            ok: false,
+            message: "Linear token missing".to_string(),
+            details: vec![detail(
+                DiagnosticLevel::Error,
+                "Credential",
+                "No Linear API key in Keychain",
+            )],
+        };
+    };
+
+    let client = LinearClient { agent, token };
+    let mut details = Vec::new();
+    let issue_keys = linear_issue_keys(sessions);
+    details.push(detail(
+        DiagnosticLevel::Info,
+        "Issue keys",
+        format!("{} local key(s)", issue_keys.len()),
+    ));
+
+    match linear_viewer(&client) {
+        Ok(viewer) => {
+            details.push(detail(DiagnosticLevel::Success, "Linear API", viewer));
+            if let Some(sample) = issue_keys.first() {
+                match linear_issue(&client, sample) {
+                    Ok(Some(issue)) => details.push(detail(
+                        DiagnosticLevel::Success,
+                        "Sample issue",
+                        format!(
+                            "{}{}",
+                            sample,
+                            issue
+                                .state
+                                .map(|state| format!(" · {state}"))
+                                .unwrap_or_default()
+                        ),
+                    )),
+                    Ok(None) => details.push(detail(
+                        DiagnosticLevel::Warning,
+                        "Sample issue",
+                        format!("{sample} not found"),
+                    )),
+                    Err(error) => {
+                        details.push(detail(DiagnosticLevel::Warning, "Sample issue", error))
+                    }
+                }
+            }
+            ProviderDiagnostics {
+                enabled: true,
+                credential_present: true,
+                ok: true,
+                message: "Linear diagnostics passed".to_string(),
+                details,
+            }
+        }
+        Err(error) => {
+            details.push(detail(DiagnosticLevel::Error, "Linear API", error));
+            ProviderDiagnostics {
+                enabled: true,
+                credential_present: true,
+                ok: false,
+                message: "Linear diagnostics failed".to_string(),
+                details,
+            }
+        }
+    }
 }
 
 fn record_provider_error(provider: &mut IntegrationProviderSync, error: String) {
@@ -488,6 +672,50 @@ fn github_get(client: &GitHubClient<'_>, path: &str) -> Result<Option<Value>, St
     }
 }
 
+fn github_rate_limit(
+    client: &GitHubClient<'_>,
+) -> Result<(Option<String>, Option<String>), String> {
+    let authorization = format!("Bearer {}", client.token);
+    let request = client
+        .agent
+        .get(&format!("{GITHUB_API}/rate_limit"))
+        .set("Accept", "application/vnd.github+json")
+        .set("Authorization", &authorization)
+        .set("User-Agent", "Sessionary")
+        .set("X-GitHub-Api-Version", "2022-11-28");
+    match request.call() {
+        Ok(response) => {
+            let remaining = response
+                .header("x-ratelimit-remaining")
+                .map(ToString::to_string)
+                .or_else(|| {
+                    response
+                        .header("X-RateLimit-Remaining")
+                        .map(ToString::to_string)
+                });
+            let scopes = response
+                .header("x-oauth-scopes")
+                .map(ToString::to_string)
+                .or_else(|| response.header("X-OAuth-Scopes").map(ToString::to_string));
+            Ok((remaining, scopes))
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            Err(format_http_error("GitHub", status, response))
+        }
+        Err(error) => Err(format!("GitHub request failed: {error}")),
+    }
+}
+
+fn github_repo_counts(sessions: &[SessionRecord]) -> (usize, usize) {
+    sessions.iter().fold((0, 0), |(parsed, missing), session| {
+        if github_repo_for_session(session).is_some() {
+            (parsed + 1, missing)
+        } else {
+            (parsed, missing + 1)
+        }
+    })
+}
+
 #[derive(Debug)]
 struct RemoteIssue {
     url: Option<String>,
@@ -563,6 +791,60 @@ fn linear_issue(client: &LinearClient<'_>, key: &str) -> Result<Option<RemoteIss
     }))
 }
 
+fn linear_viewer(client: &LinearClient<'_>) -> Result<String, String> {
+    let body = json!({
+        "query": r#"
+            query Viewer {
+              viewer {
+                id
+                name
+              }
+            }
+        "#
+    });
+    let request = client
+        .agent
+        .post(LINEAR_GRAPHQL)
+        .set("Accept", "application/json")
+        .set("Content-Type", "application/json")
+        .set("Authorization", client.token);
+    let value = match request.send_json(body) {
+        Ok(response) => response
+            .into_json::<Value>()
+            .map_err(|error| format!("Linear invalid JSON: {error}"))?,
+        Err(ureq::Error::Status(status, response)) => {
+            return Err(format_http_error("Linear", status, response));
+        }
+        Err(error) => return Err(format!("Linear request failed: {error}")),
+    };
+    if let Some(error) = value
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|errors| errors.first())
+        .and_then(|error| error.get("message"))
+        .and_then(Value::as_str)
+    {
+        return Err(format!("Linear GraphQL error: {error}"));
+    }
+    let name = value
+        .pointer("/data/viewer/name")
+        .and_then(Value::as_str)
+        .unwrap_or("viewer");
+    Ok(format!("reachable as {name}"))
+}
+
+fn linear_issue_keys(sessions: &[SessionRecord]) -> Vec<String> {
+    let mut keys = sessions
+        .iter()
+        .flat_map(|session| session.delivery.integration.issues.iter())
+        .map(|issue| issue.key.clone())
+        .filter(|key| is_linear_issue_key(key))
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
 pub(crate) fn is_linear_issue_key(value: &str) -> bool {
     let Some((prefix, number)) = value.split_once('-') else {
         return false;
@@ -624,6 +906,65 @@ mod tests {
         assert!(!is_linear_issue_key("abc-123"));
         assert!(!is_linear_issue_key("#123"));
         assert!(!is_linear_issue_key("A-123"));
+    }
+
+    #[test]
+    fn collects_unique_linear_issue_keys() {
+        let mut session = SessionRecord {
+            id: "s1".to_string(),
+            source: crate::models::SessionSource::Codex,
+            source_session_id: "s1".to_string(),
+            project_name: "p".to_string(),
+            project_path: "/tmp/p".to_string(),
+            cwd: "/tmp/p".to_string(),
+            started_at: "2026-05-22T00:00:00Z".to_string(),
+            ended_at: None,
+            duration_seconds: 1,
+            user_message_count: 0,
+            assistant_message_count: 0,
+            tool_call_count: 0,
+            token_count: None,
+            cost_amount: None,
+            status: crate::models::SessionStatus::Unknown,
+            status_updated_at: None,
+            note: String::new(),
+            confidence: 0.0,
+            changed_files: Vec::new(),
+            prompting_seconds: 0,
+            waiting_seconds: 0,
+            review_seconds: 0,
+            repair_seconds: 0,
+            review_started_at: None,
+            repair_started_at: None,
+            time_fields: crate::models::TimeFields::default(),
+            value: crate::models::SessionValue::default(),
+            summary: String::new(),
+            source_file: String::new(),
+            git_branch: None,
+            git_dirty: false,
+            delivery: crate::models::DeliveryLink::default(),
+        };
+        session.delivery.integration.issues = vec![
+            IssueLink {
+                provider: "linear_or_jira".to_string(),
+                key: "ABC-1".to_string(),
+                url: None,
+                title: None,
+                state: None,
+                status: LinkConfidence::Inferred,
+                source: "test".to_string(),
+            },
+            IssueLink {
+                provider: "linear_or_jira".to_string(),
+                key: "ABC-1".to_string(),
+                url: None,
+                title: None,
+                state: None,
+                status: LinkConfidence::Inferred,
+                source: "test".to_string(),
+            },
+        ];
+        assert_eq!(linear_issue_keys(&[session]), vec!["ABC-1"]);
     }
 
     #[test]

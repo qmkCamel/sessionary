@@ -27,6 +27,14 @@ data directory:
 
 The exact path can vary by platform and Tauri runtime conventions.
 
+Optional GitHub and Linear access tokens are stored in macOS Keychain as generic
+password entries under the `Sessionary` service. They are not stored in SQLite
+and are not included in SQLite backups.
+
+Local backups created by Sessionary copy the SQLite database to the application
+data directory under `Sessionary/backups/`. These backups contain local session
+metadata and annotations, but not Keychain credentials.
+
 ## What Sessionary Does Not Do
 
 Sessionary does not intentionally upload:

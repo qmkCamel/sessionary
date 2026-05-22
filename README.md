@@ -11,7 +11,9 @@ need review, repair, or follow-up.
 > Status: v1.0 local operating review. The app now covers local session value
 > review, human-time correction, parallel workflow review, lightweight delivery
 > linkage, PR/CI/issue attribution, and AI delegation playbooks.
-> Packaged releases, signing, auto-update, and team features are not ready yet.
+> Release-readiness work covers Keychain credentials, backup/restore,
+> integration diagnostics, and local packaging checks. Signing, auto-update,
+> and team features are not ready yet.
 
 ## Screenshots
 
@@ -37,6 +39,10 @@ need review, repair, or follow-up.
   CI/local test signals, and issue keys.
 - Builds an AI Dev Operating Review with task-type success rates, tool
   performance, and a personal delegation playbook.
+- Stores optional GitHub / Linear credentials in macOS Keychain and provides
+  explicit sync diagnostics.
+- Creates and restores local SQLite backups. Keychain credentials are excluded
+  from backups.
 - Lets you annotate session status, notes, review time, and repair time,
   including lightweight review and repair timers.
 - Generates editable daily and weekly reports that can be copied or exported
@@ -130,6 +136,7 @@ npm test
 - [Codebase guide](docs/codebase-guide.md)
 - [Technical architecture](docs/technical-architecture.md)
 - [Implementation decisions](docs/implementation-decisions.md)
+- [Release readiness](docs/release-readiness.md)
 - [Roadmap](docs/roadmap.md)
 - [OpenSpec project guide](openspec/project.md)
 

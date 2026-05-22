@@ -3,6 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::credentials;
 use crate::models::{
     AppSettings, DeliveryLink, IntegrationSettings, LanguageSetting, SessionPatch, SessionRecord,
     SessionSource, SessionStatus, SessionValue, SourceConfig, SourceStatus, TimeFieldState,
@@ -92,6 +93,10 @@ pub fn exports_dir() -> anyhow::Result<PathBuf> {
     Ok(app_dir()?.join("exports"))
 }
 
+pub fn backups_dir() -> anyhow::Result<PathBuf> {
+    Ok(app_dir()?.join("backups"))
+}
+
 pub fn connection() -> anyhow::Result<Connection> {
     init()?;
     Ok(Connection::open(db_path()?)?)
@@ -177,7 +182,7 @@ fn ensure_default_source_configs(conn: &Connection) -> anyhow::Result<()> {
         [],
     )?;
     conn.execute(
-        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('integration_settings', '{\"github\":{\"enabled\":false,\"token\":\"\"},\"linear\":{\"enabled\":false,\"token\":\"\"}}')",
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('integration_settings', '{\"github\":{\"enabled\":false,\"tokenSaved\":false,\"token\":\"\",\"clearToken\":false},\"linear\":{\"enabled\":false,\"tokenSaved\":false,\"token\":\"\",\"clearToken\":false}}')",
         [],
     )?;
     Ok(())
@@ -185,6 +190,99 @@ fn ensure_default_source_configs(conn: &Connection) -> anyhow::Result<()> {
 
 fn parse_json<T: serde::de::DeserializeOwned + Default>(value: String) -> T {
     serde_json::from_str(&value).unwrap_or_default()
+}
+
+fn sanitize_integration_settings(settings: &mut IntegrationSettings) {
+    for provider in [&mut settings.github, &mut settings.linear] {
+        provider.token.clear();
+        provider.clear_token = false;
+    }
+}
+
+fn store_integration_settings(
+    conn: &Connection,
+    settings: &IntegrationSettings,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('integration_settings', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [serde_json::to_string(settings)?],
+    )?;
+    Ok(())
+}
+
+fn load_integration_settings_raw(conn: &Connection) -> anyhow::Result<IntegrationSettings> {
+    Ok(conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='integration_settings'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(parse_json::<IntegrationSettings>)
+        .unwrap_or_default())
+}
+
+fn migrate_legacy_token(provider: &str, token: &str) -> bool {
+    !token.trim().is_empty() && credentials::set_token(provider, token.trim()).is_ok()
+}
+
+fn prepare_integration_settings_for_read(
+    conn: &Connection,
+    mut settings: IntegrationSettings,
+) -> IntegrationSettings {
+    let mut changed = false;
+    if migrate_legacy_token("github", &settings.github.token) {
+        settings.github.token.clear();
+        changed = true;
+    }
+    if migrate_legacy_token("linear", &settings.linear.token) {
+        settings.linear.token.clear();
+        changed = true;
+    }
+    settings.github.token_saved = credentials::has_token("github");
+    settings.linear.token_saved = credentials::has_token("linear");
+    settings.github.clear_token = false;
+    settings.linear.clear_token = false;
+    if changed {
+        let mut sanitized = settings.clone();
+        sanitize_integration_settings(&mut sanitized);
+        let _ = store_integration_settings(conn, &sanitized);
+    }
+    sanitize_integration_settings(&mut settings);
+    settings
+}
+
+fn prepare_provider_for_save(
+    provider: &str,
+    config: &mut crate::models::RemoteIntegrationConfig,
+) -> anyhow::Result<()> {
+    if config.clear_token {
+        credentials::delete_token(provider)?;
+        config.token_saved = false;
+    } else if !config.token.trim().is_empty() {
+        credentials::set_token(provider, config.token.trim())?;
+        config.token_saved = true;
+    } else {
+        config.token_saved = credentials::has_token(provider);
+    }
+    config.token.clear();
+    config.clear_token = false;
+    Ok(())
+}
+
+fn carry_legacy_token_forward(
+    provider: &str,
+    existing: &crate::models::RemoteIntegrationConfig,
+    incoming: &mut crate::models::RemoteIntegrationConfig,
+) {
+    if incoming.token.trim().is_empty()
+        && !incoming.clear_token
+        && !existing.token.trim().is_empty()
+        && !credentials::has_token(provider)
+    {
+        incoming.token = existing.token.clone();
+    }
 }
 
 fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
@@ -646,15 +744,8 @@ pub fn get_settings() -> anyhow::Result<AppSettings> {
         .optional()?
         .and_then(|value| LanguageSetting::try_from(value.as_str()).ok())
         .unwrap_or_default();
-    let integration_settings = conn
-        .query_row(
-            "SELECT value FROM app_settings WHERE key='integration_settings'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .map(parse_json::<IntegrationSettings>)
-        .unwrap_or_default();
+    let integration_settings = load_integration_settings_raw(&conn)?;
+    let integration_settings = prepare_integration_settings_for_read(&conn, integration_settings);
     let mut statement =
         conn.prepare("SELECT source, enabled, paths_json FROM source_configs ORDER BY source")?;
     let configs = statement
@@ -679,7 +770,21 @@ pub fn get_settings() -> anyhow::Result<AppSettings> {
 }
 
 pub fn save_settings(settings: AppSettings) -> anyhow::Result<AppSettings> {
+    let mut settings = settings;
     let mut conn = connection()?;
+    let existing = load_integration_settings_raw(&conn)?;
+    carry_legacy_token_forward(
+        "github",
+        &existing.github,
+        &mut settings.integration_settings.github,
+    );
+    carry_legacy_token_forward(
+        "linear",
+        &existing.linear,
+        &mut settings.integration_settings.linear,
+    );
+    prepare_provider_for_save("github", &mut settings.integration_settings.github)?;
+    prepare_provider_for_save("linear", &mut settings.integration_settings.linear)?;
     let tx = conn.transaction()?;
     tx.execute(
         "INSERT INTO app_settings (key, value) VALUES ('onboarding_completed', ?1)

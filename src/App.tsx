@@ -23,6 +23,8 @@ import {
 } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  createBackup,
+  diagnoseIntegrations,
   exportReport,
   exportWeeklyReport,
   finishReview,
@@ -30,6 +32,7 @@ import {
   generateReport,
   generateWeeklyReport,
   getDay,
+  getReleaseReadiness,
   getSettings,
   latestDate,
   patchSession,
@@ -37,19 +40,23 @@ import {
   scanSources,
   startReview,
   startRepair,
-  syncIntegrations
+  syncIntegrations,
+  restoreBackup
 } from "./api";
 import { createTranslator, resolveLocale, type LanguageSetting, type Translator, type TranslationKey } from "./i18n";
 import type {
   AppSettings,
+  BackupResult,
   DayLedger,
   DeliveryInsight,
   DeliveryInsightKind,
+  IntegrationDiagnosticsResult,
   IntegrationSyncResult,
   OverlapInterval,
   ParallelInsight,
   ParallelInsightKind,
   PlaybookItem,
+  ReleaseReadinessResult,
   SessionPatch,
   SessionRecord,
   SessionStatus,
@@ -377,6 +384,12 @@ function mergeStatusLabel(status: NonNullable<SessionRecord["delivery"]["integra
 
 function issueLabel(issue: SessionRecord["delivery"]["integration"]["issues"][number]) {
   return [issue.key, issue.state, issue.title].filter(Boolean).join(" · ");
+}
+
+function byteLabel(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function playbookTitle(item: PlaybookItem, t: Translator) {
@@ -1513,8 +1526,20 @@ function SettingsEditor({
   onSave,
   onScan,
   onSyncIntegrations,
+  onDiagnoseIntegrations,
+  onCreateBackup,
+  onRestoreBackup,
+  onCheckRelease,
   integrationSyncing = false,
   integrationSyncResult,
+  integrationDiagnostics,
+  integrationDiagnosing = false,
+  backupResult,
+  backupWorking = false,
+  restorePath,
+  onRestorePathChange,
+  releaseReadiness,
+  releaseChecking = false,
   compact = false
 }: {
   settings: AppSettings;
@@ -1522,8 +1547,20 @@ function SettingsEditor({
   onSave: () => void;
   onScan?: () => void;
   onSyncIntegrations?: () => void;
+  onDiagnoseIntegrations?: () => void;
+  onCreateBackup?: () => void;
+  onRestoreBackup?: () => void;
+  onCheckRelease?: () => void;
   integrationSyncing?: boolean;
   integrationSyncResult?: IntegrationSyncResult | null;
+  integrationDiagnostics?: IntegrationDiagnosticsResult | null;
+  integrationDiagnosing?: boolean;
+  backupResult?: BackupResult | null;
+  backupWorking?: boolean;
+  restorePath?: string;
+  onRestorePathChange?: (value: string) => void;
+  releaseReadiness?: ReleaseReadinessResult | null;
+  releaseChecking?: boolean;
   compact?: boolean;
 }) {
   const t = useTranslation();
@@ -1658,18 +1695,109 @@ function SettingsEditor({
                   onChange={(event) => updateIntegration(provider, { token: event.target.value })}
                   spellCheck={false}
                 />
-                {integrationSyncResult && (
+                {settings.integrationSettings[provider].tokenSaved && !settings.integrationSettings[provider].token && (
                   <small>
-                    {integrationSyncResult[provider].message}
+                    {t("settings.tokenSaved")}
                   </small>
                 )}
+                {settings.integrationSettings[provider].tokenSaved && (
+                  <button
+                    className="quiet-button"
+                    onClick={() => updateIntegration(provider, { token: "", tokenSaved: false, clearToken: true })}
+                  >
+                    {t("settings.clearToken")}
+                  </button>
+                )}
+                {integrationSyncResult && <small>{integrationSyncResult[provider].message}</small>}
               </div>
             ))}
           </div>
-          <button className="sync-button" onClick={onSyncIntegrations} disabled={integrationSyncing}>
-            <RefreshCw className={integrationSyncing ? "spin" : ""} size={15} />
-            {integrationSyncing ? t("settings.syncingIntegrations") : t("settings.syncIntegrations")}
+          <div className="release-actions">
+            <button className="sync-button" onClick={onSyncIntegrations} disabled={integrationSyncing}>
+              <RefreshCw className={integrationSyncing ? "spin" : ""} size={15} />
+              {integrationSyncing ? t("settings.syncingIntegrations") : t("settings.syncIntegrations")}
+            </button>
+            <button className="sync-button" onClick={onDiagnoseIntegrations} disabled={integrationDiagnosing}>
+              <Activity className={integrationDiagnosing ? "spin" : ""} size={15} />
+              {integrationDiagnosing ? t("settings.runningDiagnostics") : t("settings.runDiagnostics")}
+            </button>
+          </div>
+          {integrationDiagnostics && (
+            <div className="diagnostic-grid">
+              {(["github", "linear"] as const).map((provider) => (
+                <div className={`diagnostic-card ${integrationDiagnostics[provider].ok ? "pass" : "warning"}`} key={provider}>
+                  <strong>{provider === "github" ? "GitHub" : "Linear"}</strong>
+                  <span>{integrationDiagnostics[provider].message}</span>
+                  {integrationDiagnostics[provider].details.map((detail) => (
+                    <small className={`diagnostic-detail ${detail.level}`} key={`${provider}-${detail.label}-${detail.value}`}>
+                      {detail.label}: {detail.value}
+                    </small>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+      {!compact && (
+        <section className="panel release-panel">
+          <div className="panel-header">
+            <div>
+              <h2>{t("settings.backupRestore")}</h2>
+              <span>{t("settings.backupHint")}</span>
+            </div>
+          </div>
+          <div className="release-actions">
+            <button className="sync-button" onClick={onCreateBackup} disabled={backupWorking}>
+              <Download size={15} />
+              {t("settings.createBackup")}
+            </button>
+          </div>
+          {backupResult && (
+            <div className="result-box">
+              <strong>{backupResult.message}</strong>
+              <small>{backupResult.path}</small>
+              <small>{byteLabel(backupResult.bytes)}</small>
+            </div>
+          )}
+          <input
+            type="text"
+            value={restorePath ?? ""}
+            placeholder={t("settings.restorePath")}
+            onChange={(event) => onRestorePathChange?.(event.target.value)}
+            spellCheck={false}
+          />
+          <button className="sync-button" onClick={onRestoreBackup} disabled={backupWorking || !(restorePath ?? "").trim()}>
+            <RefreshCw size={15} />
+            {t("settings.restoreBackup")}
           </button>
+        </section>
+      )}
+      {!compact && (
+        <section className="panel release-panel">
+          <div className="panel-header">
+            <div>
+              <h2>{t("settings.releaseReadiness")}</h2>
+              <span>{t("settings.releaseHint")}</span>
+            </div>
+            {releaseReadiness && <span>{releaseReadiness.version}</span>}
+          </div>
+          <button className="sync-button" onClick={onCheckRelease} disabled={releaseChecking}>
+            <Check size={15} />
+            {releaseChecking ? t("settings.checkingRelease") : t("settings.checkRelease")}
+          </button>
+          {releaseReadiness && (
+            <div className="release-check-list">
+              {releaseReadiness.checks.map((check) => (
+                <div className={`release-check ${check.status}`} key={check.id}>
+                  <strong>{check.label}</strong>
+                  <span>{check.status}</span>
+                  <small>{check.detail}</small>
+                </div>
+              ))}
+              <code>{releaseReadiness.buildCommand}</code>
+            </div>
+          )}
         </section>
       )}
       <div className="settings-actions">
@@ -1686,16 +1814,40 @@ function SettingsView({
   onSave,
   onScan,
   onSyncIntegrations,
+  onDiagnoseIntegrations,
+  onCreateBackup,
+  onRestoreBackup,
+  onCheckRelease,
   integrationSyncing,
-  integrationSyncResult
+  integrationSyncResult,
+  integrationDiagnostics,
+  integrationDiagnosing,
+  backupResult,
+  backupWorking,
+  restorePath,
+  onRestorePathChange,
+  releaseReadiness,
+  releaseChecking
 }: {
   settings: AppSettings;
   onChange: (settings: AppSettings) => void;
   onSave: () => void;
   onScan: () => void;
   onSyncIntegrations: () => void;
+  onDiagnoseIntegrations: () => void;
+  onCreateBackup: () => void;
+  onRestoreBackup: () => void;
+  onCheckRelease: () => void;
   integrationSyncing: boolean;
   integrationSyncResult: IntegrationSyncResult | null;
+  integrationDiagnostics: IntegrationDiagnosticsResult | null;
+  integrationDiagnosing: boolean;
+  backupResult: BackupResult | null;
+  backupWorking: boolean;
+  restorePath: string;
+  onRestorePathChange: (value: string) => void;
+  releaseReadiness: ReleaseReadinessResult | null;
+  releaseChecking: boolean;
 }) {
   const t = useTranslation();
   return (
@@ -1712,8 +1864,20 @@ function SettingsView({
         onSave={onSave}
         onScan={onScan}
         onSyncIntegrations={onSyncIntegrations}
+        onDiagnoseIntegrations={onDiagnoseIntegrations}
+        onCreateBackup={onCreateBackup}
+        onRestoreBackup={onRestoreBackup}
+        onCheckRelease={onCheckRelease}
         integrationSyncing={integrationSyncing}
         integrationSyncResult={integrationSyncResult}
+        integrationDiagnostics={integrationDiagnostics}
+        integrationDiagnosing={integrationDiagnosing}
+        backupResult={backupResult}
+        backupWorking={backupWorking}
+        restorePath={restorePath}
+        onRestorePathChange={onRestorePathChange}
+        releaseReadiness={releaseReadiness}
+        releaseChecking={releaseChecking}
       />
     </main>
   );
@@ -2089,6 +2253,13 @@ export function App() {
   const [settingsState, setSettingsState] = useState<AppSettings | null>(null);
   const [integrationSyncing, setIntegrationSyncing] = useState(false);
   const [integrationSyncResult, setIntegrationSyncResult] = useState<IntegrationSyncResult | null>(null);
+  const [integrationDiagnosing, setIntegrationDiagnosing] = useState(false);
+  const [integrationDiagnostics, setIntegrationDiagnostics] = useState<IntegrationDiagnosticsResult | null>(null);
+  const [backupWorking, setBackupWorking] = useState(false);
+  const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
+  const [restorePath, setRestorePath] = useState("");
+  const [releaseChecking, setReleaseChecking] = useState(false);
+  const [releaseReadiness, setReleaseReadiness] = useState<ReleaseReadinessResult | null>(null);
   const [zoomMinutes, setZoomMinutes] = useState<ZoomMinutes>(30);
   const [selectedOverlap, setSelectedOverlap] = useState<OverlapInterval>();
   const [selectedRange, setSelectedRange] = useState<RangeSelection>();
@@ -2213,6 +2384,59 @@ export function App() {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setIntegrationSyncing(false);
+    }
+  };
+
+  const runIntegrationDiagnostics = async () => {
+    if (!settingsState) return;
+    setError(undefined);
+    setIntegrationDiagnosing(true);
+    try {
+      const saved = await saveSettings(settingsState);
+      setSettingsState(saved);
+      setIntegrationDiagnostics(await diagnoseIntegrations());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setIntegrationDiagnosing(false);
+    }
+  };
+
+  const runCreateBackup = async () => {
+    setError(undefined);
+    setBackupWorking(true);
+    try {
+      setBackupResult(await createBackup());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBackupWorking(false);
+    }
+  };
+
+  const runRestoreBackup = async () => {
+    if (!restorePath.trim()) return;
+    setError(undefined);
+    setBackupWorking(true);
+    try {
+      setBackupResult(await restoreBackup(restorePath.trim()));
+      await load(date, false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBackupWorking(false);
+    }
+  };
+
+  const runReleaseCheck = async () => {
+    setError(undefined);
+    setReleaseChecking(true);
+    try {
+      setReleaseReadiness(await getReleaseReadiness());
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setReleaseChecking(false);
     }
   };
 
@@ -2400,8 +2624,20 @@ export function App() {
               onSave={() => void persistSettings()}
               onScan={() => void saveAndScanSettings()}
               onSyncIntegrations={() => void runIntegrationSync()}
+              onDiagnoseIntegrations={() => void runIntegrationDiagnostics()}
+              onCreateBackup={() => void runCreateBackup()}
+              onRestoreBackup={() => void runRestoreBackup()}
+              onCheckRelease={() => void runReleaseCheck()}
               integrationSyncing={integrationSyncing}
               integrationSyncResult={integrationSyncResult}
+              integrationDiagnostics={integrationDiagnostics}
+              integrationDiagnosing={integrationDiagnosing}
+              backupResult={backupResult}
+              backupWorking={backupWorking}
+              restorePath={restorePath}
+              onRestorePathChange={setRestorePath}
+              releaseReadiness={releaseReadiness}
+              releaseChecking={releaseChecking}
             />
           )}
         </section>

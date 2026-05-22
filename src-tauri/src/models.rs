@@ -724,7 +724,11 @@ pub struct SourceConfig {
 #[serde(rename_all = "camelCase")]
 pub struct RemoteIntegrationConfig {
     pub enabled: bool,
+    #[serde(default)]
+    pub token_saved: bool,
     pub token: String,
+    #[serde(default)]
+    pub clear_token: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -812,6 +816,88 @@ pub struct IntegrationSyncResult {
     pub sessions_updated: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticDetail {
+    pub level: DiagnosticLevel,
+    pub label: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderDiagnostics {
+    pub enabled: bool,
+    pub credential_present: bool,
+    pub ok: bool,
+    pub message: String,
+    pub details: Vec<DiagnosticDetail>,
+}
+
+impl ProviderDiagnostics {
+    pub fn disabled(label: &str) -> Self {
+        Self {
+            enabled: false,
+            credential_present: false,
+            ok: false,
+            message: format!("{label} disabled"),
+            details: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationDiagnosticsResult {
+    pub checked_at: String,
+    pub github: ProviderDiagnostics,
+    pub linear: ProviderDiagnostics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupResult {
+    pub path: String,
+    pub bytes: u64,
+    pub created_at: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReleaseCheckStatus {
+    Pass,
+    Warning,
+    Fail,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseCheck {
+    pub id: String,
+    pub label: String,
+    pub status: ReleaseCheckStatus,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseReadinessResult {
+    pub checked_at: String,
+    pub version: String,
+    pub build_command: String,
+    pub checks: Vec<ReleaseCheck>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {
@@ -857,8 +943,8 @@ mod tests {
             "projectRoots": [],
             "language": "zh-CN",
             "integrationSettings": {
-                "github": { "enabled": true, "token": "ghp_example" },
-                "linear": { "enabled": false, "token": "" }
+                "github": { "enabled": true, "tokenSaved": false, "token": "ghp_example", "clearToken": false },
+                "linear": { "enabled": false, "tokenSaved": false, "token": "", "clearToken": false }
             }
         }))
         .expect("settings deserialize");
