@@ -432,6 +432,7 @@ pub enum MergeStatus {
 pub enum CiStatus {
     Passed,
     Failed,
+    Running,
     Unknown,
     NotRecorded,
 }
@@ -443,6 +444,8 @@ pub struct PullRequestLink {
     pub number: Option<i64>,
     pub url: Option<String>,
     pub branch: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
     pub status: LinkConfidence,
     pub merge_status: MergeStatus,
     pub source: String,
@@ -454,6 +457,10 @@ pub struct IssueLink {
     pub provider: String,
     pub key: String,
     pub url: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub state: Option<String>,
     pub status: LinkConfidence,
     pub source: String,
 }
@@ -713,6 +720,20 @@ pub struct SourceConfig {
     pub paths: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteIntegrationConfig {
+    pub enabled: bool,
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationSettings {
+    pub github: RemoteIntegrationConfig,
+    pub linear: RemoteIntegrationConfig,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LanguageSetting {
     #[default]
@@ -755,6 +776,40 @@ pub struct AppSettings {
     pub project_roots: Vec<String>,
     #[serde(default)]
     pub language: LanguageSetting,
+    #[serde(default)]
+    pub integration_settings: IntegrationSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationProviderSync {
+    pub enabled: bool,
+    pub attempted: bool,
+    pub linked: usize,
+    pub errors: usize,
+    pub message: String,
+}
+
+impl IntegrationProviderSync {
+    pub fn attempted(enabled: bool) -> Self {
+        Self {
+            enabled,
+            attempted: true,
+            linked: 0,
+            errors: 0,
+            message: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationSyncResult {
+    pub started_at: String,
+    pub finished_at: String,
+    pub github: IntegrationProviderSync,
+    pub linear: IntegrationProviderSync,
+    pub sessions_updated: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -790,6 +845,8 @@ mod tests {
         .expect("settings deserialize");
 
         assert_eq!(settings.language, LanguageSetting::System);
+        assert!(!settings.integration_settings.github.enabled);
+        assert!(settings.integration_settings.github.token.is_empty());
     }
 
     #[test]
@@ -798,10 +855,15 @@ mod tests {
             "onboardingCompleted": true,
             "sourceConfigs": [],
             "projectRoots": [],
-            "language": "zh-CN"
+            "language": "zh-CN",
+            "integrationSettings": {
+                "github": { "enabled": true, "token": "ghp_example" },
+                "linear": { "enabled": false, "token": "" }
+            }
         }))
         .expect("settings deserialize");
 
         assert_eq!(settings.language, LanguageSetting::ZhCn);
+        assert!(settings.integration_settings.github.enabled);
     }
 }

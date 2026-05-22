@@ -5,6 +5,7 @@ import type {
   DeliveryInsight,
   DeliveryLink,
   DeliveryReviewSummary,
+  IntegrationSyncResult,
   OperatingReviewSummary,
   OverlapInterval,
   ParallelInsight,
@@ -28,6 +29,10 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 let settings: AppSettings = {
   onboardingCompleted: true,
   language: "system",
+  integrationSettings: {
+    github: { enabled: false, token: "" },
+    linear: { enabled: false, token: "" }
+  },
   sourceConfigs: [
     { source: "codex", enabled: true, paths: ["~/.codex/sessions", "~/.codex/archived_sessions"] },
     { source: "claude", enabled: true, paths: ["~/.claude/projects", "~/.claude"] }
@@ -82,6 +87,7 @@ function deliveryFixture({
             number: 42,
             url: prUrl,
             branch: "feature/session-review",
+            state: merged ? "closed" : "open",
             status: "inferred",
             mergeStatus: merged ? "merged" : "not_merged",
             source: "local_git"
@@ -91,6 +97,8 @@ function deliveryFixture({
         provider: key.startsWith("#") ? "github" : "linear_or_jira",
         key,
         url: key.startsWith("#") ? `https://github.com/qmkCamel/sessionary/issues/${key.slice(1)}` : null,
+        title: null,
+        state: null,
         status: "inferred",
         source: "local_text"
       })),
@@ -711,6 +719,69 @@ export function fallbackSettings(): AppSettings {
 export function saveFallbackSettings(nextSettings: AppSettings): AppSettings {
   settings = clone(nextSettings);
   return fallbackSettings();
+}
+
+export function fallbackSyncIntegrations(): IntegrationSyncResult {
+  const startedAt = new Date().toISOString();
+  let sessionsUpdated = 0;
+  let githubLinked = 0;
+  let linearLinked = 0;
+
+  sessions = sessions.map((session) => {
+    const next = clone(session);
+    let changed = false;
+    const pullRequest = next.delivery.integration.pullRequest;
+    if (settings.integrationSettings.github.enabled && pullRequest) {
+      pullRequest.status = "confirmed";
+      pullRequest.source = "github_api";
+      pullRequest.state = pullRequest.mergeStatus === "merged" ? "closed" : "open";
+      next.delivery.integration.reviewCommentCount = next.delivery.integration.reviewCommentCount ?? 3;
+      next.delivery.integration.attributionConfidence = Math.max(next.delivery.integration.attributionConfidence, 0.92);
+      githubLinked += 2;
+      changed = true;
+    }
+    if (settings.integrationSettings.linear.enabled) {
+      for (const issue of next.delivery.integration.issues) {
+        if (/^[A-Z][A-Z0-9]{1,9}-\d+$/.test(issue.key)) {
+          issue.provider = "linear";
+          issue.url = `https://linear.app/sessionary/issue/${issue.key}`;
+          issue.title = `${issue.key} confirmed delivery task`;
+          issue.state = "In Progress";
+          issue.status = "confirmed";
+          issue.source = "linear_api";
+          next.delivery.integration.attributionConfidence = Math.max(next.delivery.integration.attributionConfidence, 0.88);
+          linearLinked += 1;
+          changed = true;
+        }
+      }
+    }
+    if (changed) sessionsUpdated += 1;
+    return next;
+  });
+
+  return {
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    github: {
+      enabled: settings.integrationSettings.github.enabled,
+      attempted: settings.integrationSettings.github.enabled && Boolean(settings.integrationSettings.github.token),
+      linked: githubLinked,
+      errors: 0,
+      message: settings.integrationSettings.github.enabled
+        ? `GitHub linked ${githubLinked} remote signal(s)`
+        : "GitHub disabled"
+    },
+    linear: {
+      enabled: settings.integrationSettings.linear.enabled,
+      attempted: settings.integrationSettings.linear.enabled && Boolean(settings.integrationSettings.linear.token),
+      linked: linearLinked,
+      errors: 0,
+      message: settings.integrationSettings.linear.enabled
+        ? `Linear linked ${linearLinked} remote signal(s)`
+        : "Linear disabled"
+    },
+    sessionsUpdated
+  };
 }
 
 export function fallbackReport(date = fallbackDate, locale: Locale = "en"): ReportResult {

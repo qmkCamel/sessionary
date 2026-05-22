@@ -148,13 +148,14 @@ export interface DeliveryCommit {
 
 export type LinkConfidence = "confirmed" | "inferred" | "unknown";
 export type MergeStatus = "merged" | "not_merged" | "unknown";
-export type CiStatus = "passed" | "failed" | "unknown" | "not_recorded";
+export type CiStatus = "passed" | "failed" | "running" | "unknown" | "not_recorded";
 
 export interface PullRequestLink {
   provider: string;
   number: number | null;
   url: string | null;
   branch: string | null;
+  state?: string | null;
   status: LinkConfidence;
   mergeStatus: MergeStatus;
   source: string;
@@ -164,6 +165,8 @@ export interface IssueLink {
   provider: string;
   key: string;
   url: string | null;
+  title?: string | null;
+  state?: string | null;
   status: LinkConfidence;
   source: string;
 }
@@ -341,6 +344,17 @@ export interface AppSettings {
   sourceConfigs: SourceConfig[];
   projectRoots: string[];
   language: "system" | "en" | "zh-CN";
+  integrationSettings: IntegrationSettings;
+}
+
+export interface RemoteIntegrationConfig {
+  enabled: boolean;
+  token: string;
+}
+
+export interface IntegrationSettings {
+  github: RemoteIntegrationConfig;
+  linear: RemoteIntegrationConfig;
 }
 
 export interface ScanResult {
@@ -350,6 +364,22 @@ export interface ScanResult {
   sessionsFound: number;
   errors: number;
   sourceStatus: SourceStatus[];
+}
+
+export interface IntegrationProviderSync {
+  enabled: boolean;
+  attempted: boolean;
+  linked: number;
+  errors: number;
+  message: string;
+}
+
+export interface IntegrationSyncResult {
+  startedAt: string;
+  finishedAt: string;
+  github: IntegrationProviderSync;
+  linear: IntegrationProviderSync;
+  sessionsUpdated: number;
 }
 
 export interface ReportResult {

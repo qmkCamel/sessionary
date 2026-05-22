@@ -36,7 +36,8 @@ import {
   saveSettings,
   scanSources,
   startReview,
-  startRepair
+  startRepair,
+  syncIntegrations
 } from "./api";
 import { createTranslator, resolveLocale, type LanguageSetting, type Translator, type TranslationKey } from "./i18n";
 import type {
@@ -44,6 +45,7 @@ import type {
   DayLedger,
   DeliveryInsight,
   DeliveryInsightKind,
+  IntegrationSyncResult,
   OverlapInterval,
   ParallelInsight,
   ParallelInsightKind,
@@ -362,6 +364,7 @@ function DeliveryReviewStrip({ ledger }: { ledger: DayLedger }) {
 function ciStatusLabel(status: SessionRecord["delivery"]["integration"]["ci"]["status"], t: Translator) {
   if (status === "passed") return t("deliveryReview.ciPassed");
   if (status === "failed") return t("deliveryReview.ciFailed");
+  if (status === "running") return t("deliveryReview.ciRunning");
   if (status === "unknown") return t("deliveryReview.ciUnknown");
   return t("deliveryReview.ciNotRecorded");
 }
@@ -370,6 +373,10 @@ function mergeStatusLabel(status: NonNullable<SessionRecord["delivery"]["integra
   if (status === "merged") return t("deliveryReview.merged");
   if (status === "not_merged") return t("deliveryReview.notMerged");
   return t("deliveryReview.unknownRemote");
+}
+
+function issueLabel(issue: SessionRecord["delivery"]["integration"]["issues"][number]) {
+  return [issue.key, issue.state, issue.title].filter(Boolean).join(" · ");
 }
 
 function playbookTitle(item: PlaybookItem, t: Translator) {
@@ -1430,7 +1437,7 @@ function OperatingReviewView({ ledger, onSelect }: { ledger: DayLedger; onSelect
               <span>{session.delivery.dirtyAfterSession ? t("common.enabled") : t("common.off")}</span>
               <span>{session.delivery.integration.pullRequest ? mergeStatusLabel(session.delivery.integration.pullRequest.mergeStatus, t) : t("common.notAvailable")}</span>
               <span>{ciStatusLabel(session.delivery.integration.ci.status, t)}</span>
-              <span>{session.delivery.integration.issues.map((issue) => issue.key).join(", ") || t("common.notAvailable")}</span>
+              <span>{session.delivery.integration.issues.map(issueLabel).join(", ") || t("common.notAvailable")}</span>
             </button>
           ))}
         </div>
@@ -1505,12 +1512,18 @@ function SettingsEditor({
   onChange,
   onSave,
   onScan,
+  onSyncIntegrations,
+  integrationSyncing = false,
+  integrationSyncResult,
   compact = false
 }: {
   settings: AppSettings;
   onChange: (settings: AppSettings) => void;
   onSave: () => void;
   onScan?: () => void;
+  onSyncIntegrations?: () => void;
+  integrationSyncing?: boolean;
+  integrationSyncResult?: IntegrationSyncResult | null;
   compact?: boolean;
 }) {
   const t = useTranslation();
@@ -1536,6 +1549,22 @@ function SettingsEditor({
     onChange({
       ...settings,
       language
+    });
+  };
+
+  const updateIntegration = (
+    provider: "github" | "linear",
+    patch: Partial<AppSettings["integrationSettings"]["github"]>
+  ) => {
+    onChange({
+      ...settings,
+      integrationSettings: {
+        ...settings.integrationSettings,
+        [provider]: {
+          ...settings.integrationSettings[provider],
+          ...patch
+        }
+      }
     });
   };
 
@@ -1590,6 +1619,59 @@ function SettingsEditor({
           spellCheck={false}
         />
       </section>
+      {!compact && (
+        <section className="panel integrations-panel">
+          <div className="panel-header">
+            <div>
+              <h2>{t("settings.integrations")}</h2>
+              <span>{t("settings.integrationsHint")}</span>
+            </div>
+            {integrationSyncResult && (
+              <span>{integrationSyncResult.sessionsUpdated} {t("settings.sessionsUpdated")}</span>
+            )}
+          </div>
+          <div className="integration-provider-list">
+            {([
+              ["github", "GitHub", "settings.githubToken"],
+              ["linear", "Linear", "settings.linearToken"]
+            ] as Array<["github" | "linear", string, TranslationKey]>).map(([provider, label, placeholderKey]) => (
+              <div className="integration-provider" key={provider}>
+                <div className="integration-provider-head">
+                  <strong>{label}</strong>
+                  <label className="switch">
+                    <input
+                      type="checkbox"
+                      checked={settings.integrationSettings[provider].enabled}
+                      onChange={() =>
+                        updateIntegration(provider, {
+                          enabled: !settings.integrationSettings[provider].enabled
+                        })
+                      }
+                    />
+                    <span>{settings.integrationSettings[provider].enabled ? t("common.enabled") : t("common.off")}</span>
+                  </label>
+                </div>
+                <input
+                  type="password"
+                  value={settings.integrationSettings[provider].token}
+                  placeholder={t(placeholderKey)}
+                  onChange={(event) => updateIntegration(provider, { token: event.target.value })}
+                  spellCheck={false}
+                />
+                {integrationSyncResult && (
+                  <small>
+                    {integrationSyncResult[provider].message}
+                  </small>
+                )}
+              </div>
+            ))}
+          </div>
+          <button className="sync-button" onClick={onSyncIntegrations} disabled={integrationSyncing}>
+            <RefreshCw className={integrationSyncing ? "spin" : ""} size={15} />
+            {integrationSyncing ? t("settings.syncingIntegrations") : t("settings.syncIntegrations")}
+          </button>
+        </section>
+      )}
       <div className="settings-actions">
         <button className="primary-button" onClick={onSave}>{t("common.save")}</button>
         {onScan && <button onClick={onScan}>{t("common.saveAndScan")}</button>}
@@ -1602,12 +1684,18 @@ function SettingsView({
   settings,
   onChange,
   onSave,
-  onScan
+  onScan,
+  onSyncIntegrations,
+  integrationSyncing,
+  integrationSyncResult
 }: {
   settings: AppSettings;
   onChange: (settings: AppSettings) => void;
   onSave: () => void;
   onScan: () => void;
+  onSyncIntegrations: () => void;
+  integrationSyncing: boolean;
+  integrationSyncResult: IntegrationSyncResult | null;
 }) {
   const t = useTranslation();
   return (
@@ -1618,7 +1706,15 @@ function SettingsView({
           <h1>{t("nav.settings")}</h1>
         </div>
       </div>
-      <SettingsEditor settings={settings} onChange={onChange} onSave={onSave} onScan={onScan} />
+      <SettingsEditor
+        settings={settings}
+        onChange={onChange}
+        onSave={onSave}
+        onScan={onScan}
+        onSyncIntegrations={onSyncIntegrations}
+        integrationSyncing={integrationSyncing}
+        integrationSyncResult={integrationSyncResult}
+      />
     </main>
   );
 }
@@ -1836,11 +1932,12 @@ function DetailPanel({
           {session.delivery.integration.pullRequest && (
             <span>
               {t("deliveryReview.prLinked")}: {session.delivery.integration.pullRequest.url ?? t("deliveryReview.unknownRemote")} · {mergeStatusLabel(session.delivery.integration.pullRequest.mergeStatus, t)}
+              {session.delivery.integration.pullRequest.state ? ` · ${session.delivery.integration.pullRequest.state}` : ""}
             </span>
           )}
           {session.delivery.integration.issues.length > 0 && (
             <span>
-              {t("deliveryReview.issues")}: {session.delivery.integration.issues.map((issue) => issue.key).join(", ")}
+              {t("deliveryReview.issues")}: {session.delivery.integration.issues.map(issueLabel).join(", ")}
             </span>
           )}
           <span>
@@ -1990,6 +2087,8 @@ export function App() {
   const [reportMode, setReportMode] = useState<ReportMode>("daily");
   const [renderedReportKey, setRenderedReportKey] = useState("");
   const [settingsState, setSettingsState] = useState<AppSettings | null>(null);
+  const [integrationSyncing, setIntegrationSyncing] = useState(false);
+  const [integrationSyncResult, setIntegrationSyncResult] = useState<IntegrationSyncResult | null>(null);
   const [zoomMinutes, setZoomMinutes] = useState<ZoomMinutes>(30);
   const [selectedOverlap, setSelectedOverlap] = useState<OverlapInterval>();
   const [selectedRange, setSelectedRange] = useState<RangeSelection>();
@@ -2097,6 +2196,24 @@ export function App() {
   const saveAndScanSettings = async () => {
     await persistSettings();
     await load(date, true);
+  };
+
+  const runIntegrationSync = async () => {
+    if (!settingsState) return;
+    setError(undefined);
+    setIntegrationSyncing(true);
+    try {
+      const saved = await saveSettings(settingsState);
+      setSettingsState(saved);
+      const result = await syncIntegrations();
+      setIntegrationSyncResult(result);
+      const nextLedger = await getDay(date || ledger?.metrics.date);
+      setLedger(nextLedger);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setIntegrationSyncing(false);
+    }
   };
 
   const runStartReview = async (session: SessionRecord) => {
@@ -2282,6 +2399,9 @@ export function App() {
               onChange={setSettingsState}
               onSave={() => void persistSettings()}
               onScan={() => void saveAndScanSettings()}
+              onSyncIntegrations={() => void runIntegrationSync()}
+              integrationSyncing={integrationSyncing}
+              integrationSyncResult={integrationSyncResult}
             />
           )}
         </section>

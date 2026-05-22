@@ -244,6 +244,7 @@ fn infer_pull_request(
         number,
         url: Some(url),
         branch: branch_name,
+        state: None,
         status: if number.is_some() {
             LinkConfidence::Inferred
         } else {
@@ -273,6 +274,8 @@ fn infer_issues(
                     provider: "linear_or_jira".to_string(),
                     key,
                     url: None,
+                    title: None,
+                    state: None,
                     status: LinkConfidence::Inferred,
                     source: "local_text".to_string(),
                 });
@@ -293,6 +296,8 @@ fn infer_issues(
                     provider: "github".to_string(),
                     key: key.clone(),
                     url: Some(format!("{base_url}/issues/{}", &capture[1])),
+                    title: None,
+                    state: None,
                     status: LinkConfidence::Inferred,
                     source: "local_text".to_string(),
                 });

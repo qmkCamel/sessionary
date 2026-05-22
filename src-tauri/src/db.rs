@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::models::{
-    AppSettings, DeliveryLink, LanguageSetting, SessionPatch, SessionRecord, SessionSource,
-    SessionStatus, SessionValue, SourceConfig, SourceStatus, TimeFieldState,
+    AppSettings, DeliveryLink, IntegrationSettings, LanguageSetting, SessionPatch, SessionRecord,
+    SessionSource, SessionStatus, SessionValue, SourceConfig, SourceStatus, TimeFieldState,
 };
 use crate::util::local_date;
 
@@ -174,6 +174,10 @@ fn ensure_default_source_configs(conn: &Connection) -> anyhow::Result<()> {
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('language', 'system')",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value) VALUES ('integration_settings', '{\"github\":{\"enabled\":false,\"token\":\"\"},\"linear\":{\"enabled\":false,\"token\":\"\"}}')",
         [],
     )?;
     Ok(())
@@ -352,6 +356,13 @@ pub fn sessions_between(start_iso: &str, end_iso: &str) -> anyhow::Result<Vec<Se
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
+pub fn all_sessions() -> anyhow::Result<Vec<SessionRecord>> {
+    let conn = connection()?;
+    let mut statement = conn.prepare("SELECT * FROM sessions ORDER BY started_at DESC")?;
+    let rows = statement.query_map([], session_from_row)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 pub fn latest_session_date() -> anyhow::Result<Option<String>> {
     let conn = connection()?;
     let value: Option<String> = conn
@@ -432,6 +443,19 @@ pub fn update_session(id: &str, patch: SessionPatch) -> anyhow::Result<Option<Se
         ],
     )?;
     get_session(id)
+}
+
+pub fn update_session_delivery(id: &str, delivery: &DeliveryLink) -> anyhow::Result<()> {
+    let conn = connection()?;
+    conn.execute(
+        r#"
+        UPDATE sessions
+        SET delivery_json=?1, updated_at=CURRENT_TIMESTAMP
+        WHERE id=?2
+        "#,
+        params![serde_json::to_string(delivery)?, id],
+    )?;
+    Ok(())
 }
 
 pub fn start_review(id: &str) -> anyhow::Result<Option<SessionRecord>> {
@@ -622,6 +646,15 @@ pub fn get_settings() -> anyhow::Result<AppSettings> {
         .optional()?
         .and_then(|value| LanguageSetting::try_from(value.as_str()).ok())
         .unwrap_or_default();
+    let integration_settings = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='integration_settings'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(parse_json::<IntegrationSettings>)
+        .unwrap_or_default();
     let mut statement =
         conn.prepare("SELECT source, enabled, paths_json FROM source_configs ORDER BY source")?;
     let configs = statement
@@ -641,6 +674,7 @@ pub fn get_settings() -> anyhow::Result<AppSettings> {
         source_configs: configs,
         project_roots,
         language,
+        integration_settings,
     })
 }
 
@@ -665,6 +699,11 @@ pub fn save_settings(settings: AppSettings) -> anyhow::Result<AppSettings> {
         "INSERT INTO app_settings (key, value) VALUES ('language', ?1)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         [settings.language.as_str()],
+    )?;
+    tx.execute(
+        "INSERT INTO app_settings (key, value) VALUES ('integration_settings', ?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [serde_json::to_string(&settings.integration_settings)?],
     )?;
     for config in &settings.source_configs {
         tx.execute(

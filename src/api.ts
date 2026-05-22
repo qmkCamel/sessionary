@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Locale } from "./i18n";
-import type { AppSettings, DayLedger, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus } from "./shared/types";
+import type { AppSettings, DayLedger, IntegrationSyncResult, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus } from "./shared/types";
 import {
   fallbackFinishRepair,
   fallbackLedger,
   fallbackReport,
   fallbackScan,
+  fallbackSyncIntegrations,
   fallbackSettings,
   fallbackStartRepair,
   fallbackUpdate,
@@ -59,6 +60,10 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function saveSettings(settings: AppSettings): Promise<AppSettings> {
   return invokeOrFallback("save_settings", { settings }, () => saveFallbackSettings(settings));
+}
+
+export async function syncIntegrations(): Promise<IntegrationSyncResult> {
+  return invokeOrFallback("sync_integrations", undefined, fallbackSyncIntegrations);
 }
 
 export async function generateReport(date: string, locale: Locale = "en"): Promise<ReportResult> {

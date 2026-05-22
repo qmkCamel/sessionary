@@ -90,6 +90,7 @@ small,
 .detail-section textarea,
 .report-editor,
 .time-grid input,
+.settings-editor input,
 .settings-editor textarea {
   border: 1px solid var(--line);
   background: var(--paper-strong);
@@ -119,6 +120,7 @@ nav button,
 .segmented-control button,
 .settings-actions button,
 .review-actions button,
+.sync-button,
 .rescan-button {
   border: 1px solid transparent;
   background: transparent;
@@ -666,7 +668,8 @@ button.project-table-row {
 .filter-bar button,
 .segmented-control button,
 .settings-actions button,
-.review-actions button {
+.review-actions button,
+.sync-button {
   padding: 8px 10px;
   background: #fff;
   border-color: var(--line);
@@ -1376,6 +1379,54 @@ button.delivery-table-row {
   font-size: 12px;
 }
 
+.settings-editor input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  font-family: "SFMono-Regular", "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+.integrations-panel {
+  gap: 14px;
+}
+
+.integration-provider-list {
+  display: grid;
+  gap: 12px;
+}
+
+.integration-provider {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.integration-provider:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.integration-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.integration-provider small {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.sync-button {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: 7px;
+}
+
 .settings-actions {
   justify-content: flex-end;
 }
@@ -1386,6 +1437,10 @@ button.delivery-table-row {
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.switch span {
+  white-space: nowrap;
 }
 
 .timeline-toolbar {

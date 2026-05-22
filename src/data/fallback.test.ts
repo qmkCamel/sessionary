@@ -6,6 +6,7 @@ import {
   fallbackScan,
   fallbackSettings,
   fallbackStartRepair,
+  fallbackSyncIntegrations,
   fallbackUpdate,
   fallbackWeeklyReport,
   saveFallbackSettings
@@ -60,6 +61,7 @@ describe("fallback data", () => {
     expect(saved.projectRoots).toEqual(["/Users/alex/work/sessionary"]);
     expect(fallbackSettings().language).toBe("zh-CN");
     expect(fallbackSettings().onboardingCompleted).toBe(false);
+    expect(fallbackSettings().integrationSettings.github.enabled).toBe(false);
     expect(fallbackScan().sessionsFound).toBeGreaterThan(0);
     expect(fallbackReport("2026-05-20").markdown).toContain("# Daily Report - 2026-05-20");
     expect(fallbackReport("2026-05-20").markdown).toContain("## Parallel Review");
@@ -70,6 +72,24 @@ describe("fallback data", () => {
     expect(fallbackWeeklyReport("2026-05-20").markdown).toContain("## Parallel Review");
     expect(fallbackWeeklyReport("2026-05-20").markdown).toContain("## Delivery Review");
     expect(fallbackWeeklyReport("2026-05-20").markdown).toContain("## AI Dev Operating Review");
+  });
+
+  it("simulates integration sync without network", () => {
+    const saved = saveFallbackSettings({
+      ...fallbackSettings(),
+      integrationSettings: {
+        github: { enabled: true, token: "ghp_demo" },
+        linear: { enabled: true, token: "lin_demo" }
+      }
+    });
+
+    expect(saved.integrationSettings.github.enabled).toBe(true);
+    const result = fallbackSyncIntegrations();
+    expect(result.github.linked).toBeGreaterThan(0);
+    expect(result.linear.linked).toBeGreaterThan(0);
+    expect(fallbackLedger().sessions.some((session) =>
+      session.delivery.integration.issues.some((issue) => issue.status === "confirmed")
+    )).toBe(true);
   });
 
   it("supports fallback repair timer flow", () => {

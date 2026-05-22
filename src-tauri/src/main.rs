@@ -2,13 +2,15 @@ mod analytics;
 mod db;
 mod git;
 mod ingest;
+mod integrations;
 mod models;
 mod parsers;
 mod report;
 mod util;
 
 use models::{
-    AppSettings, DayLedger, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus,
+    AppSettings, DayLedger, IntegrationSyncResult, ReportResult, ScanResult, SessionPatch,
+    SessionRecord, SessionStatus,
 };
 
 #[tauri::command]
@@ -80,6 +82,11 @@ fn save_settings(settings: AppSettings) -> Result<AppSettings, String> {
 }
 
 #[tauri::command]
+fn sync_integrations() -> Result<IntegrationSyncResult, String> {
+    integrations::sync_integrations().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn generate_report(date: String) -> Result<ReportResult, String> {
     report::build_report(&date).map_err(|error| error.to_string())
 }
@@ -113,6 +120,7 @@ fn main() {
             finish_repair,
             get_settings,
             save_settings,
+            sync_integrations,
             generate_report,
             export_report,
             generate_weekly_report,
