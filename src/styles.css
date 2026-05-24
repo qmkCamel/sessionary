@@ -237,15 +237,37 @@ nav button:hover,
 }
 
 .rescan-button {
+  position: relative;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
+  min-width: 104px;
   min-height: 36px;
   padding: 0 12px;
   background: #027d7c;
   border-color: #027d7c;
   color: #fff;
   font-weight: 700;
+  overflow: hidden;
+}
+
+.rescan-button > * {
+  position: relative;
+  z-index: 1;
+}
+
+.rescan-button:disabled {
+  cursor: wait;
+  opacity: 0.96;
+}
+
+.rescan-button.scanning::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.34), transparent);
+  animation: scan-sweep 1.25s ease-in-out infinite;
 }
 
 .workspace {
@@ -1572,6 +1594,15 @@ button.delivery-table-row {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes scan-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
   }
 }
 

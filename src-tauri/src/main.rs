@@ -17,8 +17,12 @@ use models::{
 };
 
 #[tauri::command]
-fn scan_sources() -> Result<ScanResult, String> {
-    ingest::scan_sources().map_err(|error| error.to_string())
+async fn scan_sources() -> Result<ScanResult, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        ingest::scan_sources().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

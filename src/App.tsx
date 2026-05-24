@@ -45,6 +45,11 @@ import { ReportView } from "./views/ReportView";
 import { Onboarding, SettingsView } from "./views/SettingsView";
 import { TodayView } from "./views/TodayView";
 
+type LoadOptions = {
+  shouldScan?: boolean;
+  showLoading?: boolean;
+};
+
 export function App() {
   const [view, setView] = useState<View>("today");
   const [ledger, setLedger] = useState<DayLedger | null>(null);
@@ -86,22 +91,22 @@ export function App() {
     return ledger.sessions.find((session) => session.id === selectedId);
   }, [ledger, selectedId]);
 
-  const load = async (targetDate?: string, shouldScan = false): Promise<boolean> => {
+  const load = async (targetDate?: string, options: LoadOptions = {}): Promise<boolean> => {
+    const { shouldScan = false, showLoading = true } = options;
     setError(undefined);
-    setLoading(true);
+    if (showLoading) setLoading(true);
     try {
       let resolvedDate = targetDate || date;
       const loadedSettings = await getSettings();
       setSettingsState(loadedSettings);
       if (!loadedSettings.onboardingCompleted) {
-        setLoading(false);
+        if (showLoading) setLoading(false);
         return false;
       }
       if (!resolvedDate) resolvedDate = await latestDate();
       if (shouldScan) {
         setScanning(true);
         await scanSources();
-        setScanning(false);
       }
       const nextLedger = await getDay(resolvedDate);
       setDate(nextLedger.metrics.date);
@@ -113,8 +118,22 @@ export function App() {
       setError(caught instanceof Error ? caught.message : String(caught));
       return false;
     } finally {
+      if (shouldScan) setScanning(false);
+      if (showLoading) setLoading(false);
+    }
+  };
+
+  const rescan = async () => {
+    if (scanning) return;
+    setError(undefined);
+    setScanning(true);
+    try {
+      await scanSources();
+      await load(dateRef.current || date, { showLoading: false });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
       setScanning(false);
-      setLoading(false);
     }
   };
 
@@ -123,7 +142,7 @@ export function App() {
     bootstrappedRef.current = true;
     let cancelled = false;
     const bootstrap = async () => {
-      const loaded = await load(undefined, false);
+      const loaded = await load(undefined, { showLoading: true });
       if (!loaded || cancelled) return;
 
       const initialDate = dateRef.current;
@@ -132,7 +151,7 @@ export function App() {
         await scanSources();
         if (cancelled) return;
         const refreshDate = dateRef.current === initialDate ? undefined : dateRef.current;
-        await load(refreshDate, false);
+        await load(refreshDate, { showLoading: false });
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));
       } finally {
@@ -199,12 +218,12 @@ export function App() {
     if (!settingsState) return;
     const saved = await saveSettings({ ...settingsState, onboardingCompleted: true });
     setSettingsState(saved);
-    await load(date, true);
+    await load(date, { shouldScan: true });
   };
 
   const saveAndScanSettings = async () => {
     await persistSettings();
-    await load(date, true);
+    await load(date, { shouldScan: true });
   };
 
   const runIntegrationSync = async () => {
@@ -258,7 +277,7 @@ export function App() {
     setBackupWorking(true);
     try {
       setBackupResult(await restoreBackup(restorePath.trim()));
-      await load(date, false);
+      await load(date);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -384,7 +403,7 @@ export function App() {
           onViewChange={setView}
         />
         <section className="app-workspace">
-          <WorkspaceHeader ledger={ledger} scanning={scanning} onRescan={() => void load(date, true)} />
+          <WorkspaceHeader ledger={ledger} scanning={scanning} onRescan={() => void rescan()} />
 
           {view === "today" && (
             <TodayView

@@ -19,13 +19,25 @@
 
 ### Requirement: 手动重新扫描必须继续刷新数据
 
-用户手动触发 rescan 时，应用必须（MUST）执行完整 source scan，并在扫描完成后刷新当前选中日期的 ledger。
+用户手动触发 rescan 时，应用必须（MUST）在后台执行完整 source scan，并在扫描完成后刷新当前选中日期的 ledger。扫描期间不得（MUST NOT）阻塞已有界面交互。
 
 #### Scenario: 用户点击 rescan
 
 - **WHEN** 用户在 workspace header 触发重新扫描
 - **THEN** 应用必须显示扫描状态
+- **AND** 重新扫描按钮必须显示进行中的动画反馈
+- **AND** 用户必须仍能切换页面、选择 session 或修改日期
 - **AND** 扫描完成后必须刷新当前日期数据
+
+### Requirement: 上次扫描时间必须显示真实扫描完成时间
+
+workspace header 的上次扫描时间必须（MUST）来自 source scan run 的完成时间，并且必须（MUST）包含月日和时分信息。
+
+#### Scenario: 扫描完成后查看 header
+
+- **WHEN** source scan 完成并刷新 ledger
+- **THEN** header 中的上次扫描时间必须更新为最新 scan run 的完成时间
+- **AND** 时间文案必须包含月、日、小时和分钟
 
 ### Requirement: Codex parser 必须避免重复编译热点正则
 

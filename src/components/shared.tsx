@@ -1,9 +1,9 @@
 import { AlertCircle, Check, CircleDot, Database, RefreshCw, Wrench, X } from "lucide-react";
-import type { DayLedger, SessionRecord, SessionStatus } from "../shared/types";
+import type { DayLedger, SessionRecord, SessionStatus, SourceStatus } from "../shared/types";
 import type { View } from "../app/types";
 import { useTranslation } from "../app/translation";
 import { navItems, sourceLabels, statusKeys, valueCategoryKeys } from "../app/labels";
-import { costLabel, secondsLabel, timeLabel } from "../app/format";
+import { dateTimeLabel, secondsLabel } from "../app/format";
 import { openLoopCount } from "../app/operating";
 
 export function statusIcon(status: SessionStatus) {
@@ -39,6 +39,14 @@ export function SourceHealthChips({ ledger }: { ledger: DayLedger }) {
   );
 }
 
+function latestScanAt(sources: SourceStatus[]): string | null {
+  return sources
+    .map((source) => source.lastScanAt)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1) ?? null;
+}
+
 export function WorkspaceHeader({
   ledger,
   scanning,
@@ -49,17 +57,24 @@ export function WorkspaceHeader({
   onRescan: () => void;
 }) {
   const t = useTranslation();
+  const lastScanAt = latestScanAt(ledger.sourceStatus);
   return (
     <header className="workspace-header">
       <div className="workspace-status">
         <SourceHealthChips ledger={ledger} />
         <span className="freshness">
-          {t("common.lastScan")} {timeLabel(ledger.metrics.generatedAt, t)}
+          {t("common.lastScan")} {dateTimeLabel(lastScanAt, t)}
         </span>
       </div>
-      <button className="rescan-button" title={t("sources.rescan")} onClick={onRescan}>
+      <button
+        className={`rescan-button ${scanning ? "scanning" : ""}`}
+        title={t("sources.rescan")}
+        onClick={onRescan}
+        disabled={scanning}
+        aria-busy={scanning}
+      >
         <RefreshCw size={15} className={scanning ? "spin" : ""} />
-        <span>{t("sources.rescan")}</span>
+        <span>{scanning ? t("sources.scanning") : t("sources.rescan")}</span>
       </button>
     </header>
   );
