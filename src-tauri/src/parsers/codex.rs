@@ -1,8 +1,9 @@
 use regex::Regex;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::git::{delivery_link, git_info};
 use crate::models::{
@@ -19,21 +20,39 @@ fn json_lines(file_path: &Path) -> anyhow::Result<Vec<Value>> {
         .collect())
 }
 
-fn strings_in(value: &Value, output: &mut Vec<String>) {
-    match value {
-        Value::String(text) => output.push(text.clone()),
-        Value::Array(items) => {
-            for item in items {
-                strings_in(item, output);
-            }
-        }
-        Value::Object(map) => {
-            for item in map.values() {
-                strings_in(item, output);
-            }
-        }
-        _ => {}
+fn changed_file_marker_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(r"\*\*\* (?:Add|Update|Delete) File: ([^\n]+)").expect("valid regex")
+    })
+}
+
+fn file_like_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"(/Users/[^\s"'`),]+|[A-Za-z0-9_.\-/]+\.(?:ts|tsx|js|jsx|json|md|css|html|sql|rs|py|toml|yaml|yml|mjs|cjs))"#,
+        )
+        .expect("valid regex")
+    })
+}
+
+fn test_command_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r"(?im)\b((?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|lint)\b[^\n;&|]*|cargo\s+(?:test|clippy|fmt)\b[^\n;&|]*|pytest\b[^\n;&|]*|go\s+test\b[^\n;&|]*|make\s+(?:test|check|lint)\b[^\n;&|]*)",
+        )
+        .expect("valid regex")
+    })
+}
+
+fn text_has_hint(text: &str, hints: &[&str]) -> bool {
+    if hints.iter().any(|hint| text.contains(hint)) {
+        return true;
     }
+    let lower = text.to_ascii_lowercase();
+    hints.iter().any(|hint| lower.contains(hint))
 }
 
 fn content_to_text(value: &Value) -> String {
@@ -57,28 +76,64 @@ fn content_to_text(value: &Value) -> String {
 }
 
 fn extract_changed_files(value: &Value) -> Vec<String> {
-    let mut strings = Vec::new();
-    strings_in(value, &mut strings);
-    let marker = Regex::new(r"\*\*\* (?:Add|Update|Delete) File: ([^\n]+)").expect("valid regex");
-    let file_like = Regex::new(
-        r#"(/Users/[^\s"'`),]+|[A-Za-z0-9_.\-/]+\.(?:ts|tsx|js|jsx|json|md|css|html|sql|rs|py|toml|yaml|yml|mjs|cjs))"#,
-    )
-    .expect("valid regex");
     let mut files = BTreeSet::new();
+    collect_changed_files(value, &mut files);
+    files.into_iter().take(20).collect()
+}
 
-    for text in strings {
-        for capture in marker.captures_iter(&text) {
-            files.insert(capture[1].trim().to_string());
-        }
-        for capture in file_like.captures_iter(&text) {
-            let candidate = capture[1].trim().to_string();
-            if !candidate.contains("node_modules") && !candidate.contains("/.git/") {
-                files.insert(candidate);
+fn collect_changed_files(value: &Value, files: &mut BTreeSet<String>) {
+    match value {
+        Value::String(text) => collect_changed_files_from_text(text, files),
+        Value::Array(items) => {
+            for item in items {
+                collect_changed_files(item, files);
             }
         }
+        Value::Object(map) => {
+            for item in map.values() {
+                collect_changed_files(item, files);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_changed_files_from_text(text: &str, files: &mut BTreeSet<String>) {
+    const FILE_HINTS: &[&str] = &[
+        "*** add file:",
+        "*** update file:",
+        "*** delete file:",
+        "/users/",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".json",
+        ".md",
+        ".css",
+        ".html",
+        ".sql",
+        ".rs",
+        ".py",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".mjs",
+        ".cjs",
+    ];
+    if !text_has_hint(text, FILE_HINTS) {
+        return;
     }
 
-    files.into_iter().take(20).collect()
+    for capture in changed_file_marker_regex().captures_iter(text) {
+        files.insert(capture[1].trim().to_string());
+    }
+    for capture in file_like_regex().captures_iter(text) {
+        let candidate = capture[1].trim().to_string();
+        if !candidate.contains("node_modules") && !candidate.contains("/.git/") {
+            files.insert(candidate);
+        }
+    }
 }
 
 fn test_command_status(text: &str) -> TestCommandStatus {
@@ -100,39 +155,9 @@ fn test_command_status(text: &str) -> TestCommandStatus {
     }
 }
 
-fn looks_like_test_command(command: &str) -> bool {
-    Regex::new(
-        r"(?i)\b((npm|pnpm|yarn|bun)\s+(run\s+)?(test|build|typecheck|lint)\b|cargo\s+(test|clippy|fmt)\b|pytest\b|go\s+test\b|make\s+(test|check|lint)\b)",
-    )
-    .expect("valid regex")
-    .is_match(command)
-}
-
 fn extract_test_commands(value: &Value) -> Vec<TestCommandRecord> {
-    let mut strings = Vec::new();
-    strings_in(value, &mut strings);
-    let command_regex = Regex::new(
-        r"(?im)\b((?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|build|typecheck|lint)[^\n;&|]*|cargo\s+(?:test|clippy|fmt)[^\n;&|]*|pytest[^\n;&|]*|go\s+test[^\n;&|]*|make\s+(?:test|check|lint)[^\n;&|]*)",
-    )
-    .expect("valid regex");
-    let mut commands = std::collections::BTreeMap::<String, TestCommandStatus>::new();
-
-    for text in strings {
-        let status = test_command_status(&text);
-        for capture in command_regex.captures_iter(&text) {
-            let command = capture[1].split_whitespace().collect::<Vec<_>>().join(" ");
-            if looks_like_test_command(&command) {
-                commands
-                    .entry(truncate(&command, 160))
-                    .and_modify(|existing| {
-                        if *existing == TestCommandStatus::Unknown {
-                            *existing = status;
-                        }
-                    })
-                    .or_insert(status);
-            }
-        }
-    }
+    let mut commands = BTreeMap::<String, TestCommandStatus>::new();
+    collect_test_commands(value, &mut commands);
 
     commands
         .into_iter()
@@ -143,6 +168,45 @@ fn extract_test_commands(value: &Value) -> Vec<TestCommandRecord> {
             source: "codex_log".to_string(),
         })
         .collect()
+}
+
+fn collect_test_commands(value: &Value, commands: &mut BTreeMap<String, TestCommandStatus>) {
+    match value {
+        Value::String(text) => collect_test_commands_from_text(text, commands),
+        Value::Array(items) => {
+            for item in items {
+                collect_test_commands(item, commands);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values() {
+                collect_test_commands(item, commands);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_test_commands_from_text(text: &str, commands: &mut BTreeMap<String, TestCommandStatus>) {
+    const TEST_COMMAND_HINTS: &[&str] = &[
+        "npm ", "pnpm ", "yarn ", "bun ", "cargo ", "pytest", "go test", "make ",
+    ];
+    if !text_has_hint(text, TEST_COMMAND_HINTS) {
+        return;
+    }
+
+    let status = test_command_status(text);
+    for capture in test_command_regex().captures_iter(text) {
+        let command = capture[1].split_whitespace().collect::<Vec<_>>().join(" ");
+        commands
+            .entry(truncate(&command, 160))
+            .and_modify(|existing| {
+                if *existing == TestCommandStatus::Unknown {
+                    *existing = status;
+                }
+            })
+            .or_insert(status);
+    }
 }
 
 fn token_total(payload: &Value) -> Option<i64> {
@@ -385,6 +449,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn parses_fixture_codex_session() {
@@ -399,5 +464,45 @@ mod tests {
             .changed_files
             .iter()
             .any(|file| file.ends_with("src/App.tsx")));
+    }
+
+    #[test]
+    fn extracts_nested_test_commands() {
+        let value = json!({
+            "payload": {
+                "output": [
+                    "checking build",
+                    {"text": "npm run typecheck\ncargo test --all\nexit code: 0"}
+                ]
+            }
+        });
+
+        let commands = extract_test_commands(&value);
+
+        assert!(commands.iter().any(|command| {
+            command.command == "npm run typecheck" && command.status == TestCommandStatus::Passed
+        }));
+        assert!(commands.iter().any(|command| {
+            command.command == "cargo test --all" && command.status == TestCommandStatus::Passed
+        }));
+    }
+
+    #[test]
+    fn extracts_changed_files_without_node_modules_noise() {
+        let value = json!({
+            "output": [
+                "*** Begin Patch\n*** Update File: src/App.tsx\n*** End Patch",
+                "/Users/edge/work/sessionary/src-tauri/src/main.rs",
+                "/Users/edge/work/sessionary/node_modules/vite/index.js"
+            ]
+        });
+
+        let files = extract_changed_files(&value);
+
+        assert!(files.iter().any(|file| file == "src/App.tsx"));
+        assert!(files
+            .iter()
+            .any(|file| file.ends_with("src-tauri/src/main.rs")));
+        assert!(!files.iter().any(|file| file.contains("node_modules")));
     }
 }

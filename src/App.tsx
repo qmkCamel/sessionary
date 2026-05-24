@@ -1,5 +1,5 @@
 import { AlertCircle, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   createBackup,
   diagnoseIntegrations,
@@ -72,6 +72,8 @@ export function App() {
   const [zoomMinutes, setZoomMinutes] = useState<ZoomMinutes>(30);
   const [selectedOverlap, setSelectedOverlap] = useState<OverlapInterval>();
   const [selectedRange, setSelectedRange] = useState<RangeSelection>();
+  const dateRef = useRef(date);
+  const bootstrappedRef = useRef(false);
   const locale = resolveLocale(
     settingsState?.language ?? "system",
     typeof navigator === "undefined" ? undefined : navigator.language
@@ -84,7 +86,7 @@ export function App() {
     return ledger.sessions.find((session) => session.id === selectedId);
   }, [ledger, selectedId]);
 
-  const load = async (targetDate?: string, shouldScan = false) => {
+  const load = async (targetDate?: string, shouldScan = false): Promise<boolean> => {
     setError(undefined);
     setLoading(true);
     try {
@@ -93,7 +95,7 @@ export function App() {
       setSettingsState(loadedSettings);
       if (!loadedSettings.onboardingCompleted) {
         setLoading(false);
-        return;
+        return false;
       }
       if (!resolvedDate) resolvedDate = await latestDate();
       if (shouldScan) {
@@ -103,10 +105,13 @@ export function App() {
       }
       const nextLedger = await getDay(resolvedDate);
       setDate(nextLedger.metrics.date);
+      dateRef.current = nextLedger.metrics.date;
       setLedger(nextLedger);
       setSelectedId((current) => current ?? nextLedger.sessions[0]?.id);
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return false;
     } finally {
       setScanning(false);
       setLoading(false);
@@ -114,7 +119,31 @@ export function App() {
   };
 
   useEffect(() => {
-    void load(undefined, true);
+    if (bootstrappedRef.current) return;
+    bootstrappedRef.current = true;
+    let cancelled = false;
+    const bootstrap = async () => {
+      const loaded = await load(undefined, false);
+      if (!loaded || cancelled) return;
+
+      const initialDate = dateRef.current;
+      setScanning(true);
+      try {
+        await scanSources();
+        if (cancelled) return;
+        const refreshDate = dateRef.current === initialDate ? undefined : dateRef.current;
+        await load(refreshDate, false);
+      } catch (caught) {
+        if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));
+      } finally {
+        if (!cancelled) setScanning(false);
+      }
+    };
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
