@@ -59,6 +59,7 @@ export function App() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
+  const [scanCompleted, setScanCompleted] = useState(false);
   const [error, setError] = useState<string>();
   const [markdown, setMarkdown] = useState("");
   const [exportedPath, setExportedPath] = useState<string>();
@@ -79,6 +80,7 @@ export function App() {
   const [selectedRange, setSelectedRange] = useState<RangeSelection>();
   const dateRef = useRef(date);
   const bootstrappedRef = useRef(false);
+  const scanCompletedTimerRef = useRef<number | null>(null);
   const locale = resolveLocale(
     settingsState?.language ?? "system",
     typeof navigator === "undefined" ? undefined : navigator.language
@@ -90,6 +92,21 @@ export function App() {
     if (!selectedId) return undefined;
     return ledger.sessions.find((session) => session.id === selectedId);
   }, [ledger, selectedId]);
+
+  const clearScanCompleted = () => {
+    if (scanCompletedTimerRef.current === null) return;
+    window.clearTimeout(scanCompletedTimerRef.current);
+    scanCompletedTimerRef.current = null;
+  };
+
+  const showScanCompleted = () => {
+    clearScanCompleted();
+    setScanCompleted(true);
+    scanCompletedTimerRef.current = window.setTimeout(() => {
+      setScanCompleted(false);
+      scanCompletedTimerRef.current = null;
+    }, 4000);
+  };
 
   const load = async (targetDate?: string, options: LoadOptions = {}): Promise<boolean> => {
     const { shouldScan = false, showLoading = true } = options;
@@ -105,6 +122,8 @@ export function App() {
       }
       if (!resolvedDate) resolvedDate = await latestDate();
       if (shouldScan) {
+        clearScanCompleted();
+        setScanCompleted(false);
         setScanning(true);
         await scanSources();
       }
@@ -126,16 +145,23 @@ export function App() {
   const rescan = async () => {
     if (scanning) return;
     setError(undefined);
+    clearScanCompleted();
+    setScanCompleted(false);
     setScanning(true);
     try {
       await scanSources();
-      await load(dateRef.current || date, { showLoading: false });
+      const refreshed = await load(dateRef.current || date, { showLoading: false });
+      if (refreshed) showScanCompleted();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setScanning(false);
     }
   };
+
+  useEffect(() => {
+    return () => clearScanCompleted();
+  }, []);
 
   useEffect(() => {
     if (bootstrappedRef.current) return;
@@ -403,7 +429,12 @@ export function App() {
           onViewChange={setView}
         />
         <section className="app-workspace">
-          <WorkspaceHeader ledger={ledger} scanning={scanning} onRescan={() => void rescan()} />
+          <WorkspaceHeader
+            ledger={ledger}
+            scanning={scanning}
+            scanCompleted={scanCompleted}
+            onRescan={() => void rescan()}
+          />
 
           {view === "today" && (
             <TodayView

@@ -181,8 +181,10 @@ nav button:hover,
 }
 
 .workspace-status,
+.workspace-actions,
 .source-summary,
 .source-pill,
+.scan-feedback,
 .rescan-button,
 .panel-header,
 .page-title,
@@ -198,6 +200,12 @@ nav button:hover,
 .workspace-status {
   min-width: 0;
   gap: 14px;
+}
+
+.workspace-actions {
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 224px;
 }
 
 .source-summary {
@@ -268,6 +276,27 @@ nav button:hover,
   inset: 0;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.34), transparent);
   animation: scan-sweep 1.25s ease-in-out infinite;
+}
+
+.scan-feedback {
+  gap: 6px;
+  min-width: 92px;
+  min-height: 28px;
+  color: #2f6f42;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.scan-feedback.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.scan-feedback svg {
+  flex: 0 0 auto;
 }
 
 .workspace {
@@ -1752,6 +1781,12 @@ button.delivery-table-row {
   .workspace-header,
   .workspace {
     padding-inline: 14px;
+  }
+
+  .workspace-actions {
+    justify-content: flex-start;
+    min-width: 0;
+    width: 100%;
   }
 
   .workspace-status,

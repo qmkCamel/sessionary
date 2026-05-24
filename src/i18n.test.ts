@@ -20,8 +20,10 @@ describe("i18n", () => {
 
     expect(en("nav.today")).toBe("Today");
     expect(en("settings.language")).toBe("Language");
+    expect(en("sources.scanCompleted")).toBe("Scan complete");
     expect(zh("nav.today")).toBe("今日");
     expect(zh("settings.language")).toBe("语言");
+    expect(zh("sources.scanCompleted")).toBe("扫描完成");
     expect(zh("status.needs_review")).toBe("待复盘");
   });
 });

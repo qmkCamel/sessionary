@@ -50,10 +50,12 @@ function latestScanAt(sources: SourceStatus[]): string | null {
 export function WorkspaceHeader({
   ledger,
   scanning,
+  scanCompleted,
   onRescan
 }: {
   ledger: DayLedger;
   scanning: boolean;
+  scanCompleted: boolean;
   onRescan: () => void;
 }) {
   const t = useTranslation();
@@ -66,16 +68,26 @@ export function WorkspaceHeader({
           {t("common.lastScan")} {dateTimeLabel(lastScanAt, t)}
         </span>
       </div>
-      <button
-        className={`rescan-button ${scanning ? "scanning" : ""}`}
-        title={t("sources.rescan")}
-        onClick={onRescan}
-        disabled={scanning}
-        aria-busy={scanning}
-      >
-        <RefreshCw size={15} className={scanning ? "spin" : ""} />
-        <span>{scanning ? t("sources.scanning") : t("sources.rescan")}</span>
-      </button>
+      <div className="workspace-actions">
+        <button
+          className={`rescan-button ${scanning ? "scanning" : ""}`}
+          title={t("sources.rescan")}
+          onClick={onRescan}
+          disabled={scanning}
+          aria-busy={scanning}
+        >
+          <RefreshCw size={15} className={scanning ? "spin" : ""} />
+          <span>{scanning ? t("sources.scanning") : t("sources.rescan")}</span>
+        </button>
+        <span className={`scan-feedback ${scanCompleted ? "visible" : ""}`} role="status" aria-live="polite">
+          {scanCompleted ? (
+            <>
+              <Check size={14} />
+              <span>{t("sources.scanCompleted")}</span>
+            </>
+          ) : null}
+        </span>
+      </div>
     </header>
   );
 }
