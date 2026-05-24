@@ -1,5 +1,7 @@
 # Sessionary
 
+[简体中文](README.zh-CN.md) | English
+
 [![CI](https://github.com/qmkCamel/sessionary/actions/workflows/ci.yml/badge.svg)](https://github.com/qmkCamel/sessionary/actions/workflows/ci.yml)
 
 Local-first AI coding session ledger for Codex and Claude Code sessions.
