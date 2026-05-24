@@ -34,3 +34,22 @@
 - 规格变更需通过 `npm run openspec:validate`。
 - 前端改动至少运行 `npm run typecheck`、`npm run build`、`npm test`。
 - 涉及 UI 的改动应做本地渲染验证，不只看构建输出。
+
+<!-- codex-project-init:user-action-contract:start -->
+## User Action Contract
+
+涉及用户触发、可能超过 300ms 的动作时，必须遵循全局 `user-action-contract` skill。
+
+项目内只记录引用和项目差异；完整规则以全局 skill 为唯一真相源。
+
+最低要求：
+- 不能阻塞现有界面。
+- 必须有 action-local 进行中反馈。
+- 完成后刷新相关业务数据和业务时间。
+- 失败后保留旧数据并展示可恢复错误。
+- 验证时必须在任务运行中尝试至少一个其他交互。
+
+项目补充：
+- Tauri command 超过 300ms 时，默认使用 async 或 `spawn_blocking`，除非已验证非常短。
+- React 状态命名应区分首屏 `loading` 和后台 `scanning/syncing/exporting`。
+<!-- codex-project-init:user-action-contract:end -->
