@@ -11,7 +11,7 @@ Sessionary 第一版推荐使用：
 - UI：Tailwind CSS + shadcn/ui + Recharts 或 Visx
 - 本地核心：Rust commands + parser modules
 - 数据库：SQLite
-- 数据访问：Drizzle ORM 或 Kysely
+- 数据访问：当前实现为 Rust `rusqlite` + 内联 schema；早期方案中的 Drizzle ORM / Kysely 未采用
 - 后台任务：Tauri sidecar / Rust async task
 - 打包分发：Tauri bundler
 
@@ -147,6 +147,10 @@ Electron 也是可行方案，但第一版不推荐作为首选：
 - Recharts 或 Visx
 
 ## 数据模型
+
+当前实现是 session-first 的本地 SQLite schema，物理表由 `src-tauri/src/db.rs` 内联维护，核心表为 `sessions`、`scan_runs`、`source_configs` 和 `app_settings`。日级 `days`、项目 `projects`、`session_events` 与 `annotations` 目前不是独立物理表，而是读取 `sessions` 时实时聚合或折叠在 session row 的 JSON / 标注字段中。
+
+完整现行口径见 `docs/data-metric-definitions.md`。下面保留的是早期架构方案里的逻辑模型，用于说明产品抽象，不应直接当作当前数据库 schema。
 
 ### days
 

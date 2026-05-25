@@ -6,11 +6,15 @@ import { useTranslation } from "../app/translation";
 
 export function ReportOverview({ ledger }: { ledger: DayLedger }) {
   const t = useTranslation();
+  const promptingSeconds = ledger.metrics.promptingSecondsEstimated + ledger.metrics.promptingSecondsManual;
+  const aiWaitingSeconds = ledger.metrics.aiWaitingSecondsEstimated + ledger.metrics.aiWaitingSecondsManual;
+  const reviewSeconds = ledger.metrics.reviewSecondsEstimated + ledger.metrics.reviewSecondsManual;
+  const repairSeconds = ledger.metrics.repairSecondsEstimated + ledger.metrics.repairSecondsManual;
   const totalTime =
-    ledger.metrics.promptingSecondsEstimated +
-    ledger.metrics.aiWaitingSecondsEstimated +
-    ledger.metrics.reviewSecondsEstimated +
-    ledger.metrics.repairSecondsEstimated;
+    promptingSeconds +
+    aiWaitingSeconds +
+    reviewSeconds +
+    repairSeconds;
   const topProjects = [...ledger.projects].sort((left, right) => right.activeSeconds - left.activeSeconds).slice(0, 5);
 
   return (
@@ -55,19 +59,19 @@ export function ReportOverview({ ledger }: { ledger: DayLedger }) {
         <dl className="overview-list">
           <div>
             <dt>{t("metric.prompting")}</dt>
-            <dd>{secondsLabel(ledger.metrics.promptingSecondsEstimated)}</dd>
+            <dd>{secondsLabel(promptingSeconds)}</dd>
           </div>
           <div>
             <dt>{t("metric.aiWaiting")}</dt>
-            <dd>{secondsLabel(ledger.metrics.aiWaitingSecondsEstimated)}</dd>
+            <dd>{secondsLabel(aiWaitingSeconds)}</dd>
           </div>
           <div>
             <dt>{t("metric.review")}</dt>
-            <dd>{secondsLabel(ledger.metrics.reviewSecondsEstimated)}</dd>
+            <dd>{secondsLabel(reviewSeconds)}</dd>
           </div>
           <div>
             <dt>{t("metric.repair")}</dt>
-            <dd>{secondsLabel(ledger.metrics.repairSecondsEstimated)}</dd>
+            <dd>{secondsLabel(repairSeconds)}</dd>
           </div>
         </dl>
       </section>

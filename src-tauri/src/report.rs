@@ -76,6 +76,10 @@ fn total_human_seconds(sessions: &[SessionRecord]) -> i64 {
         .sum()
 }
 
+fn total_metric_time(estimated: i64, manual: i64) -> i64 {
+    estimated + manual
+}
+
 fn percent(value: f64) -> String {
     format!("{}%", (value * 100.0).round() as i64)
 }
@@ -214,20 +218,32 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
         format!("- Projects: {}", ledger.metrics.project_count),
         format!("- Sessions: {}", ledger.metrics.session_count),
         format!(
-            "- AI waiting estimated: {}",
-            human_time(ledger.metrics.ai_waiting_seconds_estimated)
+            "- AI waiting: {}",
+            human_time(total_metric_time(
+                ledger.metrics.ai_waiting_seconds_estimated,
+                ledger.metrics.ai_waiting_seconds_manual
+            ))
         ),
         format!(
-            "- Prompting estimated: {}",
-            human_time(ledger.metrics.prompting_seconds_estimated)
+            "- Prompting: {}",
+            human_time(total_metric_time(
+                ledger.metrics.prompting_seconds_estimated,
+                ledger.metrics.prompting_seconds_manual
+            ))
         ),
         format!(
-            "- Review estimated: {}",
-            human_time(ledger.metrics.review_seconds_estimated)
+            "- Review: {}",
+            human_time(total_metric_time(
+                ledger.metrics.review_seconds_estimated,
+                ledger.metrics.review_seconds_manual
+            ))
         ),
         format!(
-            "- Repair estimated: {}",
-            human_time(ledger.metrics.repair_seconds_estimated)
+            "- Repair: {}",
+            human_time(total_metric_time(
+                ledger.metrics.repair_seconds_estimated,
+                ledger.metrics.repair_seconds_manual
+            ))
         ),
         format!("- Tool calls: {}", ledger.metrics.tool_call_count),
         format!("- Tokens: {}", ledger.metrics.token_count),
@@ -545,11 +561,11 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
         String::new(),
         format!("- Projects: {project_count}"),
         format!("- Sessions: {}", sessions.len()),
-        format!("- Prompting estimated: {}", human_time(prompting_seconds)),
-        format!("- AI waiting estimated: {}", human_time(waiting_seconds)),
-        format!("- Review estimated: {}", human_time(review_seconds)),
-        format!("- Repair estimated: {}", human_time(repair_seconds)),
-        format!("- Human time estimated: {}", human_time(human_seconds)),
+        format!("- Prompting: {}", human_time(prompting_seconds)),
+        format!("- AI waiting: {}", human_time(waiting_seconds)),
+        format!("- Review: {}", human_time(review_seconds)),
+        format!("- Repair: {}", human_time(repair_seconds)),
+        format!("- Human time: {}", human_time(human_seconds)),
         format!("- Parallel project time: {}", human_time(parallel_seconds)),
         format!("- Tool calls: {tool_call_count}"),
         format!("- Tokens: {token_count}"),
@@ -777,6 +793,8 @@ mod tests {
             repair_seconds,
             review_started_at: None,
             repair_started_at: None,
+            review_intervals: Vec::new(),
+            repair_intervals: Vec::new(),
             time_fields: TimeFields::default(),
             value: SessionValue::default(),
             summary: "Implemented a useful change".to_string(),

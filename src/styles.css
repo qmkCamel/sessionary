@@ -1133,6 +1133,21 @@ button.project-table-row {
   text-overflow: ellipsis;
 }
 
+.file-source-list {
+  display: grid;
+  gap: 8px;
+}
+
+.file-source-group {
+  display: grid;
+  gap: 5px;
+}
+
+.file-source-group small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .delivery-detail-section {
   padding-top: 4px;
   border-top: 1px solid var(--line);

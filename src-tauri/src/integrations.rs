@@ -936,6 +936,8 @@ mod tests {
             repair_seconds: 0,
             review_started_at: None,
             repair_started_at: None,
+            review_intervals: Vec::new(),
+            repair_intervals: Vec::new(),
             time_fields: crate::models::TimeFields::default(),
             value: crate::models::SessionValue::default(),
             summary: String::new(),

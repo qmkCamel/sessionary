@@ -67,6 +67,9 @@ function deliveryFixture({
   return {
     diffSummary,
     changedFiles: files,
+    fileHints: files,
+    gitDirtyFiles: dirty ? files : [],
+    commitFiles: committed ? files : [],
     commits: committed
       ? [
           {
@@ -141,6 +144,8 @@ let sessions: SessionRecord[] = [
     repairSeconds: 0,
     reviewStartedAt: null,
     repairStartedAt: null,
+    reviewIntervals: [],
+    repairIntervals: [],
     timeFields: {
       prompting: "estimated",
       waiting: "estimated",
@@ -187,6 +192,8 @@ let sessions: SessionRecord[] = [
     repairSeconds: 300,
     reviewStartedAt: null,
     repairStartedAt: null,
+    reviewIntervals: [],
+    repairIntervals: [],
     timeFields: {
       prompting: "estimated",
       waiting: "estimated",
@@ -236,6 +243,8 @@ let sessions: SessionRecord[] = [
     repairSeconds: 480,
     reviewStartedAt: null,
     repairStartedAt: null,
+    reviewIntervals: [],
+    repairIntervals: [],
     timeFields: {
       prompting: "estimated",
       waiting: "estimated",
@@ -283,6 +292,10 @@ function projectSummaries(currentSessions: SessionRecord[]): ProjectSummary[] {
   return [...grouped.entries()].map(([path, projectSessions]) => {
     const startedAt = projectSessions.reduce((earliest, session) => session.startedAt < earliest ? session.startedAt : earliest, projectSessions[0].startedAt);
     const endedValues = projectSessions.map((session) => session.endedAt).filter((value): value is string => Boolean(value));
+    const sessionIds = new Set(projectSessions.map((session) => session.id));
+    const parallelSeconds = overlaps
+      .filter((overlap) => overlap.sessionIds.some((sessionId) => sessionIds.has(sessionId)))
+      .reduce((total, overlap) => total + overlap.seconds, 0);
     return {
       name: projectSessions[0].projectName,
       path,
@@ -290,8 +303,9 @@ function projectSummaries(currentSessions: SessionRecord[]): ProjectSummary[] {
       startedAt,
       endedAt: endedValues.length > 0 ? endedValues.sort().at(-1) ?? null : null,
       activeSeconds: projectSessions.reduce((total, session) => total + session.durationSeconds, 0),
+      parallelSeconds,
       sources: [...new Set(projectSessions.map((session) => session.source))],
-      isParallel: projectSessions.some((session) => overlaps.some((overlap) => overlap.sessionIds.includes(session.id))),
+      isParallel: parallelSeconds > 0,
       gitBranch: projectSessions[0].gitBranch,
       gitDirty: projectSessions.some((session) => session.gitDirty)
     };
@@ -575,9 +589,13 @@ function metricsFor(
     projectCount: new Set(currentSessions.map((session) => session.projectPath)).size,
     sessionCount: currentSessions.length,
     aiWaitingSecondsEstimated: currentSessions.reduce((total, session) => total + session.waitingSeconds, 0),
+    aiWaitingSecondsManual: 0,
     promptingSecondsEstimated: currentSessions.reduce((total, session) => total + session.promptingSeconds, 0),
+    promptingSecondsManual: 0,
     reviewSecondsEstimated: currentSessions.reduce((total, session) => total + session.reviewSeconds, 0),
+    reviewSecondsManual: 0,
     repairSecondsEstimated: currentSessions.reduce((total, session) => total + session.repairSeconds, 0),
+    repairSecondsManual: 0,
     toolCallCount: currentSessions.reduce((total, session) => total + session.toolCallCount, 0),
     tokenCount: currentSessions.reduce((total, session) => total + (session.tokenCount ?? 0), 0),
     costAmount: currentSessions.reduce((total, session) => total + (session.costAmount ?? 0), 0),
@@ -613,6 +631,16 @@ export function fallbackLedger(date = fallbackDate): DayLedger {
     statusUpdatedAt: session.statusUpdatedAt?.replace(fallbackDate, date) ?? null,
     reviewStartedAt: session.reviewStartedAt?.replace(fallbackDate, date) ?? null,
     repairStartedAt: session.repairStartedAt?.replace(fallbackDate, date) ?? null,
+    reviewIntervals: session.reviewIntervals.map((interval) => ({
+      ...interval,
+      startedAt: interval.startedAt.replace(fallbackDate, date),
+      endedAt: interval.endedAt.replace(fallbackDate, date)
+    })),
+    repairIntervals: session.repairIntervals.map((interval) => ({
+      ...interval,
+      startedAt: interval.startedAt.replace(fallbackDate, date),
+      endedAt: interval.endedAt.replace(fallbackDate, date)
+    })),
     delivery: {
       ...session.delivery,
       commits: session.delivery.commits.map((commit) => ({
@@ -697,15 +725,22 @@ export function fallbackStartRepair(id: string): SessionRecord {
 
 export function fallbackFinishRepair(id: string, status: SessionStatus = "repaired"): SessionRecord {
   const current = sessions.find((session) => session.id === id) ?? sessions[0];
+  const endedAt = new Date().toISOString();
   const elapsedSeconds = current.repairStartedAt
-    ? Math.max(0, Math.round((Date.now() - new Date(current.repairStartedAt).getTime()) / 1000))
+    ? Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(current.repairStartedAt).getTime()) / 1000))
     : 0;
   const next = withValue({
     ...current,
     status,
-    statusUpdatedAt: new Date().toISOString(),
+    statusUpdatedAt: endedAt,
     repairStartedAt: null,
     repairSeconds: current.repairSeconds + elapsedSeconds,
+    repairIntervals: current.repairStartedAt
+      ? [
+          ...current.repairIntervals,
+          { startedAt: current.repairStartedAt, endedAt, seconds: elapsedSeconds }
+        ]
+      : current.repairIntervals,
     timeFields: {
       ...current.timeFields,
       repair: "manual"
@@ -976,10 +1011,10 @@ export function fallbackWeeklyReport(date = fallbackDate, locale: Locale = "en")
       "",
       `${t("report.fallback.sessions")}: ${ledger.metrics.sessionCount}`,
       `${t("report.fallback.projects")}: ${ledger.metrics.projectCount}`,
-      `Prompting estimated: ${Math.round(ledger.metrics.promptingSecondsEstimated / 60)}m`,
-      `AI waiting estimated: ${Math.round(ledger.metrics.aiWaitingSecondsEstimated / 60)}m`,
-      `Review estimated: ${Math.round(ledger.metrics.reviewSecondsEstimated / 60)}m`,
-      `Repair estimated: ${Math.round(ledger.metrics.repairSecondsEstimated / 60)}m`,
+      `Prompting: ${Math.round((ledger.metrics.promptingSecondsEstimated + ledger.metrics.promptingSecondsManual) / 60)}m`,
+      `AI waiting: ${Math.round((ledger.metrics.aiWaitingSecondsEstimated + ledger.metrics.aiWaitingSecondsManual) / 60)}m`,
+      `Review: ${Math.round((ledger.metrics.reviewSecondsEstimated + ledger.metrics.reviewSecondsManual) / 60)}m`,
+      `Repair: ${Math.round((ledger.metrics.repairSecondsEstimated + ledger.metrics.repairSecondsManual) / 60)}m`,
       `Tool calls: ${ledger.metrics.toolCallCount}`,
       `Tokens: ${ledger.metrics.tokenCount}`,
       `Cost: $${ledger.metrics.costAmount.toFixed(4)}`,

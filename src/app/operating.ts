@@ -28,8 +28,24 @@ export function openLoopCount(ledger: DayLedger) {
   return ledger.metrics.unknownCount + ledger.metrics.needsReviewCount + ledger.metrics.needsRepairCount;
 }
 
-export function humanTimeEstimateSeconds(ledger: DayLedger) {
-  return ledger.metrics.promptingSecondsEstimated + ledger.metrics.reviewSecondsEstimated + ledger.metrics.repairSecondsEstimated;
+export function humanTimeSeconds(ledger: DayLedger) {
+  return (
+    ledger.metrics.promptingSecondsEstimated +
+    ledger.metrics.promptingSecondsManual +
+    ledger.metrics.reviewSecondsEstimated +
+    ledger.metrics.reviewSecondsManual +
+    ledger.metrics.repairSecondsEstimated +
+    ledger.metrics.repairSecondsManual
+  );
+}
+
+export function hasManualTime(ledger: DayLedger) {
+  return (
+    ledger.metrics.promptingSecondsManual +
+    ledger.metrics.aiWaitingSecondsManual +
+    ledger.metrics.reviewSecondsManual +
+    ledger.metrics.repairSecondsManual
+  ) > 0;
 }
 
 export function prioritySessions(ledger: DayLedger) {

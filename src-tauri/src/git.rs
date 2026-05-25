@@ -35,12 +35,12 @@ fn run_git(cwd: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn run_git_status(cwd: &Path, args: &[&str]) -> Option<bool> {
-    let status = Command::new("git")
+    let output = Command::new("git")
         .args(args)
         .current_dir(cwd)
-        .status()
+        .output()
         .ok()?;
-    Some(status.success())
+    Some(output.status.success())
 }
 
 pub fn git_info(cwd: &Path) -> GitInfo {
@@ -376,8 +376,10 @@ pub fn delivery_link(
     note: &str,
 ) -> DeliveryLink {
     if !cwd.exists() {
+        let file_hints = unique_files(file_hints.iter().cloned());
         return DeliveryLink {
-            changed_files: unique_files(file_hints.iter().cloned()),
+            changed_files: file_hints.clone(),
+            file_hints,
             test_commands,
             confidence: 0.15,
             ..DeliveryLink::default()
@@ -386,24 +388,23 @@ pub fn delivery_link(
 
     let git = git_info(cwd);
     let commits = git_log_window(&git.root, started_at, ended_at);
-    let commit_files = commits
+    let commit_files = unique_files(commits
         .iter()
         .flat_map(|commit| commit.files.clone())
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>());
+    let file_hints = unique_files(file_hints.iter().cloned());
+    let git_dirty_files = unique_files(git.changed_files.iter().cloned());
     let changed_files = unique_files(
         file_hints
             .iter()
             .cloned()
-            .chain(git.changed_files.iter().cloned())
-            .chain(commit_files),
+            .chain(git_dirty_files.iter().cloned())
+            .chain(commit_files.iter().cloned()),
     );
     let hint_set = file_hints.iter().cloned().collect::<BTreeSet<_>>();
-    let file_overlap = commits
-        .iter()
-        .flat_map(|commit| commit.files.iter())
-        .any(|file| hint_set.contains(file));
+    let file_overlap = commit_files.iter().any(|file| hint_set.contains(file));
     let committed_after_session = !commits.is_empty();
-    let absorbed = committed_after_session && (!git.dirty || file_overlap);
+    let absorbed = committed_after_session && file_overlap && !git.dirty;
     let diff_stat = run_git(&git.root, &["diff", "--shortstat"])
         .or_else(|| run_git(&git.root, &["diff", "--cached", "--shortstat"]));
     let integration = DeliveryIntegration {
@@ -434,6 +435,9 @@ pub fn delivery_link(
     DeliveryLink {
         diff_summary: diff_summary(&git.changed_files, diff_stat, &commits),
         changed_files,
+        file_hints,
+        git_dirty_files,
+        commit_files,
         commits,
         committed_after_session,
         dirty_after_session: git.dirty,
@@ -441,5 +445,68 @@ pub fn delivery_link(
         test_commands,
         confidence,
         integration,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn unique_temp_repo(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "sessionary-{name}-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ))
+    }
+
+    fn git(cwd: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("git command runs");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn delivery_link_keeps_file_sources_and_requires_commit_overlap_for_absorbed() {
+        let repo = unique_temp_repo("delivery-link");
+        fs::create_dir_all(&repo).expect("repo dir");
+        git(&repo, &["init"]);
+        git(&repo, &["config", "user.email", "sessionary@example.test"]);
+        git(&repo, &["config", "user.name", "Sessionary Test"]);
+        fs::write(repo.join("unrelated.rs"), "fn main() {}\n").expect("write file");
+        git(&repo, &["add", "unrelated.rs"]);
+        git(&repo, &["commit", "-m", "commit unrelated file"]);
+        let started_at = (Utc::now() - Duration::hours(1))
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
+        let ended_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+
+        let delivery = delivery_link(
+            &repo,
+            &started_at,
+            Some(&ended_at),
+            &["src/App.tsx".to_string()],
+            Vec::new(),
+            "summary",
+            "",
+        );
+
+        assert!(delivery.committed_after_session);
+        assert_eq!(delivery.file_hints, vec!["src/App.tsx".to_string()]);
+        assert!(delivery
+            .commit_files
+            .iter()
+            .any(|file| file == "unrelated.rs"));
+        assert!(!delivery.absorbed);
+
+        let _ = fs::remove_dir_all(repo);
     }
 }

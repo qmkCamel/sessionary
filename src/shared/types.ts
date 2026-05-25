@@ -41,6 +41,12 @@ export interface SessionValue {
   reasons: SessionValueReason[];
 }
 
+export interface TimeIntervalRecord {
+  startedAt: string;
+  endedAt: string;
+  seconds: number;
+}
+
 export interface SessionRecord {
   id: string;
   source: SessionSource;
@@ -67,6 +73,8 @@ export interface SessionRecord {
   repairSeconds: number;
   reviewStartedAt: string | null;
   repairStartedAt: string | null;
+  reviewIntervals: TimeIntervalRecord[];
+  repairIntervals: TimeIntervalRecord[];
   timeFields: Record<"prompting" | "waiting" | "review" | "repair", TimeFieldState>;
   value: SessionValue;
   summary: string;
@@ -83,6 +91,7 @@ export interface ProjectSummary {
   startedAt: string;
   endedAt: string | null;
   activeSeconds: number;
+  parallelSeconds: number;
   sources: SessionSource[];
   isParallel: boolean;
   gitBranch: string | null;
@@ -188,6 +197,9 @@ export interface DeliveryIntegration {
 export interface DeliveryLink {
   diffSummary: string;
   changedFiles: string[];
+  fileHints: string[];
+  gitDirtyFiles: string[];
+  commitFiles: string[];
   commits: DeliveryCommit[];
   committedAfterSession: boolean;
   dirtyAfterSession: boolean;
@@ -282,9 +294,13 @@ export interface DayMetrics {
   projectCount: number;
   sessionCount: number;
   aiWaitingSecondsEstimated: number;
+  aiWaitingSecondsManual: number;
   promptingSecondsEstimated: number;
+  promptingSecondsManual: number;
   reviewSecondsEstimated: number;
+  reviewSecondsManual: number;
   repairSecondsEstimated: number;
+  repairSecondsManual: number;
   toolCallCount: number;
   tokenCount: number;
   costAmount: number;

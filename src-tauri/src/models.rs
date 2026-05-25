@@ -159,6 +159,14 @@ impl Default for TimeFields {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeIntervalRecord {
+    pub started_at: String,
+    pub ended_at: String,
+    pub seconds: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRecord {
@@ -187,6 +195,8 @@ pub struct SessionRecord {
     pub repair_seconds: i64,
     pub review_started_at: Option<String>,
     pub repair_started_at: Option<String>,
+    pub review_intervals: Vec<TimeIntervalRecord>,
+    pub repair_intervals: Vec<TimeIntervalRecord>,
     pub time_fields: TimeFields,
     pub value: SessionValue,
     pub summary: String,
@@ -323,6 +333,7 @@ pub struct ProjectSummary {
     pub started_at: String,
     pub ended_at: Option<String>,
     pub active_seconds: i64,
+    pub parallel_seconds: i64,
     pub sources: Vec<SessionSource>,
     pub is_parallel: bool,
     pub git_branch: Option<String>,
@@ -510,6 +521,12 @@ impl Default for DeliveryIntegration {
 pub struct DeliveryLink {
     pub diff_summary: String,
     pub changed_files: Vec<String>,
+    #[serde(default)]
+    pub file_hints: Vec<String>,
+    #[serde(default)]
+    pub git_dirty_files: Vec<String>,
+    #[serde(default)]
+    pub commit_files: Vec<String>,
     pub commits: Vec<DeliveryCommit>,
     pub committed_after_session: bool,
     pub dirty_after_session: bool,
@@ -524,6 +541,9 @@ impl Default for DeliveryLink {
         Self {
             diff_summary: String::new(),
             changed_files: Vec::new(),
+            file_hints: Vec::new(),
+            git_dirty_files: Vec::new(),
+            commit_files: Vec::new(),
             commits: Vec::new(),
             committed_after_session: false,
             dirty_after_session: false,
@@ -657,9 +677,13 @@ pub struct DayMetrics {
     pub project_count: usize,
     pub session_count: usize,
     pub ai_waiting_seconds_estimated: i64,
+    pub ai_waiting_seconds_manual: i64,
     pub prompting_seconds_estimated: i64,
+    pub prompting_seconds_manual: i64,
     pub review_seconds_estimated: i64,
+    pub review_seconds_manual: i64,
     pub repair_seconds_estimated: i64,
+    pub repair_seconds_manual: i64,
     pub tool_call_count: i64,
     pub token_count: i64,
     pub cost_amount: f64,

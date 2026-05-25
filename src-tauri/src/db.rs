@@ -7,6 +7,7 @@ use crate::credentials;
 use crate::models::{
     AppSettings, DeliveryLink, IntegrationSettings, LanguageSetting, SessionPatch, SessionRecord,
     SessionSource, SessionStatus, SessionValue, SourceConfig, SourceStatus, TimeFieldState,
+    TimeIntervalRecord,
 };
 use crate::util::local_date;
 
@@ -37,6 +38,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   repair_seconds INTEGER NOT NULL DEFAULT 0,
   review_started_at TEXT,
   repair_started_at TEXT,
+  review_intervals_json TEXT NOT NULL DEFAULT '[]',
+  repair_intervals_json TEXT NOT NULL DEFAULT '[]',
   time_fields_json TEXT NOT NULL DEFAULT '{"prompting":"estimated","waiting":"estimated","review":"estimated","repair":"estimated"}',
   summary TEXT NOT NULL DEFAULT '',
   source_file TEXT NOT NULL DEFAULT '',
@@ -108,6 +111,18 @@ pub fn init() -> anyhow::Result<()> {
     conn.execute_batch(SCHEMA)?;
     ensure_column(&conn, "sessions", "review_started_at", "TEXT")?;
     ensure_column(&conn, "sessions", "repair_started_at", "TEXT")?;
+    ensure_column(
+        &conn,
+        "sessions",
+        "review_intervals_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        &conn,
+        "sessions",
+        "repair_intervals_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
     ensure_column(
         &conn,
         "sessions",
@@ -290,6 +305,8 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     let status_text: String = row.get("status")?;
     let changed_files_json: String = row.get("changed_files_json")?;
     let time_fields_json: String = row.get("time_fields_json")?;
+    let review_intervals_json: String = row.get("review_intervals_json")?;
+    let repair_intervals_json: String = row.get("repair_intervals_json")?;
     let delivery_json: String = row.get("delivery_json")?;
 
     let mut session = SessionRecord {
@@ -318,6 +335,8 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         repair_seconds: row.get("repair_seconds")?,
         review_started_at: row.get("review_started_at")?,
         repair_started_at: row.get("repair_started_at")?,
+        review_intervals: parse_json(review_intervals_json),
+        repair_intervals: parse_json(repair_intervals_json),
         time_fields: parse_json(time_fields_json),
         value: SessionValue::default(),
         summary: row.get("summary")?,
@@ -366,11 +385,11 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
               id, source, source_session_id, project_name, project_path, cwd, started_at, ended_at,
               duration_seconds, user_message_count, assistant_message_count, tool_call_count,
               token_count, cost_amount, status, status_updated_at, note, confidence, changed_files_json,
-              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, repair_started_at, time_fields_json,
+              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, repair_started_at, review_intervals_json, repair_intervals_json, time_fields_json,
               summary, source_file, git_branch, git_dirty, delivery_json
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31
+              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33
             )
             ON CONFLICT(id) DO UPDATE SET
               source=excluded.source,
@@ -432,6 +451,8 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
                 session.repair_seconds,
                 session.review_started_at,
                 session.repair_started_at,
+                serde_json::to_string(&session.review_intervals)?,
+                serde_json::to_string(&session.repair_intervals)?,
                 serde_json::to_string(&session.time_fields)?,
                 session.summary,
                 session.source_file,
@@ -587,12 +608,20 @@ pub fn finish_review(
     };
     let finished_at = chrono::Utc::now();
     let mut review_seconds = current.review_seconds;
+    let mut review_intervals = current.review_intervals;
     if let Some(started_at) = current.review_started_at.as_deref() {
         if let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) {
             let elapsed = (finished_at - started.with_timezone(&chrono::Utc))
                 .num_seconds()
                 .max(0);
             review_seconds = review_seconds.saturating_add(elapsed);
+            review_intervals.push(TimeIntervalRecord {
+                started_at: started
+                    .with_timezone(&chrono::Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                ended_at: finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                seconds: elapsed,
+            });
         }
     }
     let mut time_fields = current.time_fields;
@@ -605,14 +634,16 @@ pub fn finish_review(
         SET review_started_at=NULL,
             review_seconds=?1,
             time_fields_json=?2,
-            status=?3,
-            status_updated_at=?4,
+            review_intervals_json=?3,
+            status=?4,
+            status_updated_at=?5,
             updated_at=CURRENT_TIMESTAMP
-        WHERE id=?5
+        WHERE id=?6
         "#,
         params![
             review_seconds,
             serde_json::to_string(&time_fields)?,
+            serde_json::to_string(&review_intervals)?,
             next_status.as_str(),
             finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             id
@@ -650,12 +681,20 @@ pub fn finish_repair(
     };
     let finished_at = chrono::Utc::now();
     let mut repair_seconds = current.repair_seconds;
+    let mut repair_intervals = current.repair_intervals;
     if let Some(started_at) = current.repair_started_at.as_deref() {
         if let Ok(started) = chrono::DateTime::parse_from_rfc3339(started_at) {
             let elapsed = (finished_at - started.with_timezone(&chrono::Utc))
                 .num_seconds()
                 .max(0);
             repair_seconds = repair_seconds.saturating_add(elapsed);
+            repair_intervals.push(TimeIntervalRecord {
+                started_at: started
+                    .with_timezone(&chrono::Utc)
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                ended_at: finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                seconds: elapsed,
+            });
         }
     }
     let mut time_fields = current.time_fields;
@@ -668,14 +707,16 @@ pub fn finish_repair(
         SET repair_started_at=NULL,
             repair_seconds=?1,
             time_fields_json=?2,
-            status=?3,
-            status_updated_at=?4,
+            repair_intervals_json=?3,
+            status=?4,
+            status_updated_at=?5,
             updated_at=CURRENT_TIMESTAMP
-        WHERE id=?5
+        WHERE id=?6
         "#,
         params![
             repair_seconds,
             serde_json::to_string(&time_fields)?,
+            serde_json::to_string(&repair_intervals)?,
             next_status.as_str(),
             finished_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             id

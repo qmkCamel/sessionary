@@ -251,8 +251,10 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     let mut source_session_id = stable_id(&file_path.display().to_string());
     let mut cwd = String::new();
     let mut first_user_message = String::new();
-    let mut user_message_count = 0_i64;
-    let mut assistant_message_count = 0_i64;
+    let mut event_user_message_count = 0_i64;
+    let mut event_assistant_message_count = 0_i64;
+    let mut response_user_message_count = 0_i64;
+    let mut response_assistant_message_count = 0_i64;
     let mut tool_call_count = 0_i64;
     let mut token_count: Option<i64> = None;
     let mut cost_amount: Option<f64> = None;
@@ -295,7 +297,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                 .unwrap_or_default()
             {
                 "user_message" => {
-                    user_message_count += 1;
+                    event_user_message_count += 1;
                     if first_user_message.is_empty() {
                         first_user_message = payload
                             .get("message")
@@ -304,7 +306,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                             .to_string();
                     }
                 }
-                "agent_message" => assistant_message_count += 1,
+                "agent_message" => event_assistant_message_count += 1,
                 "token_count" => {
                     if let Some(total) = token_total(payload) {
                         token_count = Some(token_count.unwrap_or(0).max(total));
@@ -343,9 +345,9 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                 {
-                    "assistant" => assistant_message_count += 1,
+                    "assistant" => response_assistant_message_count += 1,
                     "user" => {
-                        user_message_count += 1;
+                        response_user_message_count += 1;
                         if first_user_message.is_empty() {
                             if let Some(content) = payload.get("content") {
                                 first_user_message = content_to_text(content);
@@ -367,6 +369,9 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     let started_at = timestamps.first().cloned().expect("timestamp exists");
     let ended_at = timestamps.last().cloned();
     let duration_seconds = seconds_between(&started_at, ended_at.as_deref());
+    let user_message_count = event_user_message_count.max(response_user_message_count);
+    let assistant_message_count =
+        event_assistant_message_count.max(response_assistant_message_count);
     let prompting_seconds = clamp(
         user_message_count * 90,
         0,
@@ -436,6 +441,8 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
         repair_seconds: 0,
         review_started_at: None,
         repair_started_at: None,
+        review_intervals: Vec::new(),
+        repair_intervals: Vec::new(),
         time_fields: TimeFields::default(),
         value: Default::default(),
         summary: truncate(&first_user_message, 180),
@@ -504,5 +511,16 @@ mod tests {
             .iter()
             .any(|file| file.ends_with("src-tauri/src/main.rs")));
         assert!(!files.iter().any(|file| file.contains("node_modules")));
+    }
+
+    #[test]
+    fn does_not_double_count_mirrored_messages() {
+        let path = Path::new("../fixtures/codex/duplicate-messages.jsonl");
+        let session = parse_codex_file(path)
+            .expect("fixture parses")
+            .expect("session");
+
+        assert_eq!(session.user_message_count, 1);
+        assert_eq!(session.assistant_message_count, 1);
     }
 }

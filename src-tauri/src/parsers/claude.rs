@@ -419,6 +419,8 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
             repair_seconds: 0,
             review_started_at: None,
             repair_started_at: None,
+            review_intervals: Vec::new(),
+            repair_intervals: Vec::new(),
             time_fields: TimeFields::default(),
             value: Default::default(),
             summary: truncate(&first_user_message, 180),

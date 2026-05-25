@@ -133,6 +133,12 @@ export function DetailPanel({
     );
   }
 
+  const fileSourceGroups = [
+    { label: t("detail.fileHints"), files: session.delivery.fileHints },
+    { label: t("detail.gitDirtyFiles"), files: session.delivery.gitDirtyFiles },
+    { label: t("detail.commitFiles"), files: session.delivery.commitFiles }
+  ].filter((group) => group.files.length > 0);
+
   return (
     <aside className="detail-panel">
       <div className="detail-title">
@@ -324,9 +330,22 @@ export function DetailPanel({
 
       <section className="detail-section">
         <h3>{t("detail.files")}</h3>
-        <div className="file-list">
-          {session.changedFiles.length === 0 ? <span>{t("detail.noFileHints")}</span> : session.changedFiles.map((file) => <span key={file}>{file}</span>)}
-        </div>
+        {fileSourceGroups.length === 0 ? (
+          <div className="file-list">
+            {session.changedFiles.length === 0 ? <span>{t("detail.noFileHints")}</span> : session.changedFiles.map((file) => <span key={file}>{file}</span>)}
+          </div>
+        ) : (
+          <div className="file-source-list">
+            {fileSourceGroups.map((group) => (
+              <div className="file-source-group" key={group.label}>
+                <small>{group.label}</small>
+                <div className="file-list">
+                  {group.files.map((file) => <span key={`${group.label}:${file}`}>{file}</span>)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="detail-section">

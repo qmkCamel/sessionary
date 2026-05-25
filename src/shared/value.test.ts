@@ -29,6 +29,8 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     repairSeconds: 0,
     reviewStartedAt: null,
     repairStartedAt: null,
+    reviewIntervals: [],
+    repairIntervals: [],
     timeFields: {
       prompting: "estimated",
       waiting: "estimated",
@@ -43,6 +45,9 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     delivery: {
       diffSummary: "",
       changedFiles: [],
+      fileHints: [],
+      gitDirtyFiles: [],
+      commitFiles: [],
       commits: [],
       committedAfterSession: false,
       dirtyAfterSession: false,

@@ -3,7 +3,7 @@ import type { DayLedger, OverlapInterval, SessionRecord } from "../shared/types"
 import type { Filter, RangeSelection, View, ZoomMinutes } from "../app/types";
 import { compactNumber, costLabel, secondsLabel } from "../app/format";
 import { statusKeys } from "../app/labels";
-import { humanTimeEstimateSeconds, openLoopCount, prioritySessions } from "../app/operating";
+import { hasManualTime, humanTimeSeconds, openLoopCount, prioritySessions } from "../app/operating";
 import { useTranslation } from "../app/translation";
 import { EmptyState, Metric, SessionPill } from "../components/shared";
 import { DeliveryInsightCard, DeliveryReviewStrip, ParallelInsightCard, ParallelReviewStrip } from "../components/reviews";
@@ -50,7 +50,7 @@ export function TodayView({
         <Metric label={t("today.reviewQueue")} value={openLoopCount(ledger)} />
         <Metric label={t("metric.repair")} value={ledger.metrics.needsRepairCount} />
         <Metric label={t("metric.parallel")} value={secondsLabel(ledger.metrics.parallelSeconds)} />
-        <Metric label={t("today.humanTime")} value={secondsLabel(humanTimeEstimateSeconds(ledger))} hint={t("metric.estimated")} />
+        <Metric label={t("today.humanTime")} value={secondsLabel(humanTimeSeconds(ledger))} hint={hasManualTime(ledger) ? t("metric.mixedTime") : t("metric.estimated")} />
         <Metric label={t("metric.highValue")} value={ledger.metrics.highValueCount} />
         <Metric label={t("metric.tools")} value={compactNumber(ledger.metrics.toolCallCount)} />
         <Metric label={t("metric.tokens")} value={compactNumber(ledger.metrics.tokenCount)} />
@@ -170,7 +170,7 @@ export function TodayView({
                 <span>{project.sessionCount}</span>
                 <span>{secondsLabel(waiting)}</span>
                 <span>{secondsLabel(review)}</span>
-                <span>{project.isParallel ? secondsLabel(project.activeSeconds) : "0m"}</span>
+                <span>{secondsLabel(project.parallelSeconds)}</span>
                 <span className={`status-chip ${status}`}>{t(statusKeys[status])}</span>
               </button>
             );
