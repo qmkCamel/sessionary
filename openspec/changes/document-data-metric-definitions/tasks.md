@@ -7,7 +7,8 @@
 
 - [x] 2.1 梳理 parser、SQLite、analytics、delivery、integration、report 的当前实现口径。
 - [x] 2.2 在 `docs/data-metric-definitions.md` 沉淀数据口径、风险和后续建议。
-- [x] 2.3 在 `docs/user-facing-time-metrics.md` 沉淀面向用户的时间统计说明和典型例子。
+- [x] 2.3 在 `docs/user-facing-time-metrics.md` 沉淀面向用户的时间统计 PR 稿。
+- [x] 2.4 在 `docs/developer-time-metrics.md` 沉淀开发者时间统计口径。
 
 ## 3. 验证
 

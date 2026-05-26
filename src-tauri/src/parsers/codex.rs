@@ -9,6 +9,7 @@ use crate::git::{delivery_link, git_info};
 use crate::models::{
     SessionRecord, SessionSource, SessionStatus, TestCommandRecord, TestCommandStatus, TimeFields,
 };
+use crate::parsers::{infer_ai_waiting_intervals, AiEvent, AiEventKind};
 use crate::util::{clamp, normalize_timestamp, seconds_between, stable_id, truncate};
 
 fn json_lines(file_path: &Path) -> anyhow::Result<Vec<Value>> {
@@ -259,17 +260,18 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     let mut token_count: Option<i64> = None;
     let mut cost_amount: Option<f64> = None;
     let mut timestamps = Vec::new();
+    let mut ai_events = Vec::new();
     let mut changed_files = BTreeSet::new();
     let mut test_commands = Vec::<TestCommandRecord>::new();
 
     for item in items {
         test_commands.extend(extract_test_commands(&item));
-        if let Some(timestamp) = item
+        let item_timestamp = item
             .get("timestamp")
             .and_then(Value::as_str)
-            .and_then(normalize_timestamp)
-        {
-            timestamps.push(timestamp);
+            .and_then(normalize_timestamp);
+        if let Some(timestamp) = &item_timestamp {
+            timestamps.push(timestamp.clone());
         }
         let payload = item.get("payload").unwrap_or(&Value::Null);
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
@@ -297,6 +299,12 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                 .unwrap_or_default()
             {
                 "user_message" => {
+                    if let Some(timestamp) = &item_timestamp {
+                        ai_events.push(AiEvent {
+                            at: timestamp.clone(),
+                            kind: AiEventKind::User,
+                        });
+                    }
                     event_user_message_count += 1;
                     if first_user_message.is_empty() {
                         first_user_message = payload
@@ -306,8 +314,22 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                             .to_string();
                     }
                 }
-                "agent_message" => event_assistant_message_count += 1,
+                "agent_message" => {
+                    if let Some(timestamp) = &item_timestamp {
+                        ai_events.push(AiEvent {
+                            at: timestamp.clone(),
+                            kind: AiEventKind::Ai,
+                        });
+                    }
+                    event_assistant_message_count += 1;
+                }
                 "token_count" => {
+                    if let Some(timestamp) = &item_timestamp {
+                        ai_events.push(AiEvent {
+                            at: timestamp.clone(),
+                            kind: AiEventKind::Ai,
+                        });
+                    }
                     if let Some(total) = token_total(payload) {
                         token_count = Some(token_count.unwrap_or(0).max(total));
                     }
@@ -326,6 +348,12 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                 .unwrap_or_default()
             {
                 "function_call" => {
+                    if let Some(timestamp) = &item_timestamp {
+                        ai_events.push(AiEvent {
+                            at: timestamp.clone(),
+                            kind: AiEventKind::Ai,
+                        });
+                    }
                     tool_call_count += 1;
                     if let Some(args) = payload.get("arguments") {
                         for file in extract_changed_files(args) {
@@ -334,6 +362,12 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                     }
                 }
                 "function_call_output" => {
+                    if let Some(timestamp) = &item_timestamp {
+                        ai_events.push(AiEvent {
+                            at: timestamp.clone(),
+                            kind: AiEventKind::Ai,
+                        });
+                    }
                     if let Some(output) = payload.get("output") {
                         for file in extract_changed_files(output) {
                             changed_files.insert(file);
@@ -345,8 +379,22 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                 {
-                    "assistant" => response_assistant_message_count += 1,
+                    "assistant" => {
+                        if let Some(timestamp) = &item_timestamp {
+                            ai_events.push(AiEvent {
+                                at: timestamp.clone(),
+                                kind: AiEventKind::Ai,
+                            });
+                        }
+                        response_assistant_message_count += 1;
+                    }
                     "user" => {
+                        if let Some(timestamp) = &item_timestamp {
+                            ai_events.push(AiEvent {
+                                at: timestamp.clone(),
+                                kind: AiEventKind::User,
+                            });
+                        }
                         response_user_message_count += 1;
                         if first_user_message.is_empty() {
                             if let Some(content) = payload.get("content") {
@@ -372,6 +420,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     let user_message_count = event_user_message_count.max(response_user_message_count);
     let assistant_message_count =
         event_assistant_message_count.max(response_assistant_message_count);
+    let ai_waiting_intervals = infer_ai_waiting_intervals(ai_events);
     let prompting_seconds = clamp(
         user_message_count * 90,
         0,
@@ -382,7 +431,14 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
     } else {
         0
     };
-    let waiting_seconds = (duration_seconds - prompting_seconds).max(0);
+    let waiting_seconds = if ai_waiting_intervals.is_empty() {
+        (duration_seconds - prompting_seconds).max(0)
+    } else {
+        ai_waiting_intervals
+            .iter()
+            .map(|interval| interval.seconds)
+            .sum()
+    };
 
     let cwd_path = if cwd.is_empty() {
         file_path
@@ -441,6 +497,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
         repair_seconds: 0,
         review_started_at: None,
         repair_started_at: None,
+        ai_waiting_intervals,
         review_intervals: Vec::new(),
         repair_intervals: Vec::new(),
         time_fields: TimeFields::default(),
@@ -522,5 +579,29 @@ mod tests {
 
         assert_eq!(session.user_message_count, 1);
         assert_eq!(session.assistant_message_count, 1);
+    }
+
+    #[test]
+    fn infers_ai_waiting_turn_intervals() {
+        let path = Path::new("../fixtures/codex/ai-turns.jsonl");
+        let session = parse_codex_file(path)
+            .expect("fixture parses")
+            .expect("session");
+
+        assert_eq!(session.ai_waiting_intervals.len(), 2);
+        assert_eq!(
+            session.ai_waiting_intervals[0].user_sent_at,
+            "2026-05-19T01:01:00.000Z"
+        );
+        assert_eq!(
+            session.ai_waiting_intervals[0].ai_finished_at,
+            "2026-05-19T01:05:00.000Z"
+        );
+        assert_eq!(session.ai_waiting_intervals[0].seconds, 240);
+        assert_eq!(
+            session.ai_waiting_intervals[0].source,
+            crate::models::AiWaitingIntervalSource::Inferred
+        );
+        assert_eq!(session.ai_waiting_intervals[1].seconds, 240);
     }
 }

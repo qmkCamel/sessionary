@@ -11,6 +11,8 @@ export type SessionStatus =
 
 export type TimeFieldState = "estimated" | "manual";
 
+export type AiWaitingIntervalSource = "event" | "inferred" | "estimated";
+
 export type SessionValueCategory =
   | "high_value"
   | "mixed_value"
@@ -47,6 +49,13 @@ export interface TimeIntervalRecord {
   seconds: number;
 }
 
+export interface AiWaitingIntervalRecord {
+  userSentAt: string;
+  aiFinishedAt: string;
+  seconds: number;
+  source: AiWaitingIntervalSource;
+}
+
 export interface SessionRecord {
   id: string;
   source: SessionSource;
@@ -73,6 +82,7 @@ export interface SessionRecord {
   repairSeconds: number;
   reviewStartedAt: string | null;
   repairStartedAt: string | null;
+  aiWaitingIntervals: AiWaitingIntervalRecord[];
   reviewIntervals: TimeIntervalRecord[];
   repairIntervals: TimeIntervalRecord[];
   timeFields: Record<"prompting" | "waiting" | "review" | "repair", TimeFieldState>;

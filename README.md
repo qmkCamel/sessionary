@@ -133,14 +133,19 @@ npm test
 
 ## Project Docs
 
-- [Product positioning](docs/product-positioning.md)
-- [MVP capabilities](docs/mvp-capabilities.md)
 - [Codebase guide](docs/codebase-guide.md)
 - [Technical architecture](docs/technical-architecture.md)
-- [Implementation decisions](docs/implementation-decisions.md)
+- [Data metric definitions](docs/data-metric-definitions.md)
+- [Developer time metrics](docs/developer-time-metrics.md)
+- [User-facing time metrics](docs/user-facing-time-metrics.md)
 - [Release readiness](docs/release-readiness.md)
 - [Roadmap](docs/roadmap.md)
 - [OpenSpec project guide](openspec/project.md)
+
+Historical planning snapshots are kept under
+[docs/archive](docs/archive/2026-05-19-mvp/README.md). They document the thinking
+at that point in time and should not be treated as current implementation
+contracts.
 
 ## Contributing
 

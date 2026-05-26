@@ -362,6 +362,51 @@ fn human_intervals_for_session(
     intervals
 }
 
+fn ai_waiting_intervals_for_session(
+    session: &SessionRecord,
+    range_start: DateTime<Utc>,
+    range_end: DateTime<Utc>,
+) -> Vec<TimelineInterval> {
+    if session.time_fields.waiting == TimeFieldState::Estimated
+        && !session.ai_waiting_intervals.is_empty()
+    {
+        return session
+            .ai_waiting_intervals
+            .iter()
+            .filter_map(|record| {
+                let start = parse_utc(&record.user_sent_at).ok()?.max(range_start);
+                let end = parse_utc(&record.ai_finished_at).ok()?.min(range_end);
+                (end > start).then(|| TimelineInterval {
+                    start,
+                    end,
+                    session_id: session.id.clone(),
+                })
+            })
+            .collect();
+    }
+
+    let Some(ended_at) = &session.ended_at else {
+        return Vec::new();
+    };
+    let Ok(session_start) = parse_utc(&session.started_at) else {
+        return Vec::new();
+    };
+    let Ok(session_end) = parse_utc(ended_at) else {
+        return Vec::new();
+    };
+    let waiting_start = session_start + Duration::seconds(session.prompting_seconds.max(0));
+    let start = waiting_start.max(range_start);
+    let end = session_end.min(range_end);
+    if end <= start {
+        return Vec::new();
+    }
+    vec![TimelineInterval {
+        start,
+        end,
+        session_id: session.id.clone(),
+    }]
+}
+
 pub fn build_parallel_review_summary(
     sessions: &[SessionRecord],
     range_start: &str,
@@ -394,21 +439,7 @@ pub fn build_parallel_review_summary(
 
     let waiting_intervals = sessions
         .iter()
-        .filter_map(|session| {
-            let Some(ended_at) = &session.ended_at else {
-                return None;
-            };
-            let session_start = parse_utc(&session.started_at).ok()?;
-            let waiting_start = session_start + Duration::seconds(session.prompting_seconds.max(0));
-            let waiting_end = parse_utc(ended_at).ok()?;
-            let start = waiting_start.max(range_start_dt);
-            let end = waiting_end.min(range_end_dt);
-            (end > start).then(|| TimelineInterval {
-                start,
-                end,
-                session_id: session.id.clone(),
-            })
-        })
+        .flat_map(|session| ai_waiting_intervals_for_session(session, range_start_dt, range_end_dt))
         .collect::<Vec<_>>();
 
     let human_intervals = sessions
@@ -1102,9 +1133,24 @@ fn windowed_time_contribution(
     let prompting_start = session_start;
     let prompting_end =
         (session_start + Duration::seconds(session.prompting_seconds.max(0))).min(session_end);
-    let waiting_start = prompting_end;
-    let waiting_end =
-        (waiting_start + Duration::seconds(session.waiting_seconds.max(0))).min(session_end);
+    let waiting = if session.time_fields.waiting == TimeFieldState::Estimated
+        && !session.ai_waiting_intervals.is_empty()
+    {
+        session
+            .ai_waiting_intervals
+            .iter()
+            .filter_map(|record| {
+                let start = parse_utc(&record.user_sent_at).ok()?;
+                let end = parse_utc(&record.ai_finished_at).ok()?;
+                Some(raw_interval_overlap_seconds(start, end, range_start, range_end))
+            })
+            .sum()
+    } else {
+        let waiting_start = prompting_end;
+        let waiting_end =
+            (waiting_start + Duration::seconds(session.waiting_seconds.max(0))).min(session_end);
+        raw_interval_overlap_seconds(waiting_start, waiting_end, range_start, range_end)
+    };
     let review = if !session.review_intervals.is_empty() {
         session
             .review_intervals
@@ -1155,7 +1201,7 @@ fn windowed_time_contribution(
             range_start,
             range_end,
         ),
-        waiting: raw_interval_overlap_seconds(waiting_start, waiting_end, range_start, range_end),
+        waiting,
         review,
         repair,
     }
@@ -1330,8 +1376,8 @@ pub fn build_day_ledger(date: &str) -> anyhow::Result<DayLedger> {
 mod tests {
     use super::*;
     use crate::models::{
-        DeliveryLink, SessionSource, TestCommandRecord, TestCommandStatus, TimeFieldState,
-        TimeFields, TimeIntervalRecord,
+        AiWaitingIntervalRecord, AiWaitingIntervalSource, DeliveryLink, SessionSource,
+        TestCommandRecord, TestCommandStatus, TimeFieldState, TimeFields, TimeIntervalRecord,
     };
 
     fn session(id: &str, project: &str, start: &str, end: &str) -> SessionRecord {
@@ -1361,6 +1407,7 @@ mod tests {
             repair_seconds: 0,
             review_started_at: None,
             repair_started_at: None,
+            ai_waiting_intervals: Vec::new(),
             review_intervals: Vec::new(),
             repair_intervals: Vec::new(),
             time_fields: TimeFields::default(),
@@ -1631,6 +1678,81 @@ mod tests {
             1,
         )
         .expect("summary builds");
+
+        assert_eq!(summary.ai_waiting_human_overlap_seconds, 600);
+    }
+
+    #[test]
+    fn day_metrics_prefers_ai_waiting_intervals_over_modeled_waiting() {
+        let mut item = session(
+            "waiting-turn",
+            "alpha",
+            "2026-05-19T01:00:00.000Z",
+            "2026-05-19T02:00:00.000Z",
+        );
+        item.duration_seconds = 3600;
+        item.prompting_seconds = 600;
+        item.waiting_seconds = 3000;
+        item.ai_waiting_intervals = vec![AiWaitingIntervalRecord {
+            user_sent_at: "2026-05-19T01:10:00.000Z".to_string(),
+            ai_finished_at: "2026-05-19T01:20:00.000Z".to_string(),
+            seconds: 600,
+            source: AiWaitingIntervalSource::Inferred,
+        }];
+
+        let metrics = build_day_metrics(
+            "2026-05-19",
+            &[item],
+            &ParallelReviewSummary::default(),
+            &DeliveryReviewSummary::default(),
+            1,
+            1,
+        )
+        .expect("metrics build");
+
+        assert_eq!(metrics.ai_waiting_seconds_estimated, 600);
+    }
+
+    #[test]
+    fn parallel_review_prefers_ai_waiting_intervals_for_human_overlap() {
+        let mut waiting = session(
+            "waiting",
+            "alpha",
+            "2026-05-19T01:00:00.000Z",
+            "2026-05-19T02:00:00.000Z",
+        );
+        waiting.prompting_seconds = 0;
+        waiting.waiting_seconds = 3600;
+        waiting.ai_waiting_intervals = vec![AiWaitingIntervalRecord {
+            user_sent_at: "2026-05-19T01:20:00.000Z".to_string(),
+            ai_finished_at: "2026-05-19T01:30:00.000Z".to_string(),
+            seconds: 600,
+            source: AiWaitingIntervalSource::Inferred,
+        }];
+
+        let mut reviewer = session(
+            "reviewer",
+            "beta",
+            "2026-05-19T00:00:00.000Z",
+            "2026-05-19T00:30:00.000Z",
+        );
+        reviewer.review_seconds = 600;
+        reviewer.review_intervals = vec![TimeIntervalRecord {
+            started_at: "2026-05-19T01:20:00.000Z".to_string(),
+            ended_at: "2026-05-19T01:30:00.000Z".to_string(),
+            seconds: 600,
+        }];
+
+        let summary = build_parallel_review_summary(
+            &[waiting, reviewer],
+            "2026-05-19T00:00:00.000Z",
+            "2026-05-20T00:00:00.000Z",
+            &[],
+            &[],
+            1,
+            1,
+        )
+        .expect("summary computes");
 
         assert_eq!(summary.ai_waiting_human_overlap_seconds, 600);
     }

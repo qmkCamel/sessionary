@@ -8,7 +8,7 @@ Sessionary 当前的数据口径是本地优先、session-first、估算优先�
 
 这套口径适合回答“今天有哪些 AI coding sessions、它们是否已经 review / repair / absorb、并行开发大概有没有产生收益”，但不适合当作精确工时、绩效排名、逐行代码归因或财务级成本统计。
 
-面向用户的时间统计解释、UI 文案和典型例子见 `docs/user-facing-time-metrics.md`。本文档保留实现侧字段和算法口径。
+时间统计拆成两份说明：面向用户的 PR 稿见 `docs/user-facing-time-metrics.md`，开发者实现口径见 `docs/developer-time-metrics.md`。本文档保留全局数据模型、聚合和跨模块口径。
 
 本次修复后，几个关键边界已经收敛：
 
@@ -48,6 +48,7 @@ Sessionary 当前的数据口径是本地优先、session-first、估算优先�
 - 时间：`started_at`、`ended_at`、`duration_seconds`。
 - 活动计数：`user_message_count`、`assistant_message_count`、`tool_call_count`、`token_count`、`cost_amount`。
 - 人工时间：`prompting_seconds`、`waiting_seconds`、`review_seconds`、`repair_seconds`。
+- AI 等待区间：`ai_waiting_intervals_json`。
 - 实际计时间隔：`review_intervals_json`、`repair_intervals_json`。
 - 时间来源：`time_fields_json`，字段值为 `estimated` 或 `manual`。
 - 用户标注：`status`、`status_updated_at`、`note`。
@@ -141,11 +142,11 @@ Claude parser 支持本地 projects JSONL 与 OpenTelemetry 风格事件。
 | 字段 | Parser 默认算法 | 含义 |
 | --- | --- | --- |
 | `prompting_seconds` | `clamp(user_message_count * 90, 0, duration * 0.35)` | 用户输入/指令整理的估算时间 |
-| `waiting_seconds` | `duration_seconds - prompting_seconds`，下限 0 | session 运行期内非 prompting 的等待时间 |
+| `waiting_seconds` | 优先为 `ai_waiting_intervals` 合计；缺失时回退为 `duration_seconds - prompting_seconds` | 用户发送指令后等待 AI 本轮完成的可感知等待时间，或旧估算等待窗口 |
 | `review_seconds` | 如果有结束时间，则 `clamp(duration * 0.12, 60, 900)` | session 结束后的默认人工复盘估算 |
 | `repair_seconds` | 0 | 默认无修复时间，除非用户标记或手动录入 |
 
-`prompting + waiting` 约等于 session duration。`review` 和 `repair` 是 session 后置人工时间，因此 `prompting + waiting + review + repair` 可以大于 `duration_seconds`。
+如果没有事件级 AI waiting interval，`prompting + waiting` 约等于 session duration。存在事件级 interval 时，`waiting` 只统计用户发送后到本轮 AI 最后事件的可感知等待区间，不再保证覆盖完整 session active window。`review` 和 `repair` 是 session 后置人工时间，因此 `prompting + waiting + review + repair` 可以大于 `duration_seconds`。
 
 用户在 Detail 里保存时间后，对应字段标记为 `manual`，后续重新扫描不会覆盖该字段。`Start Review / Done` 会累加实际经过时间到 `review_seconds`、写入 `review_intervals_json`，并标记 manual；`Start Repair / Mark Repaired` 会累加到 `repair_seconds`、写入 `repair_intervals_json`，并标记 manual。
 
@@ -303,10 +304,11 @@ started_at < day_end AND COALESCE(ended_at, started_at) >= day_start
 | `contextSwitchCount` | 相邻 session start 的跨项目切换次数 |
 | `shortContextSwitchCount` | 相邻 session start 间隔 <= 20 分钟的跨项目切换次数 |
 
-AI waiting interval 当前定义为：
+AI waiting interval 当前优先级：
 
 ```text
-started_at + prompting_seconds -> ended_at
+1. ai_waiting_intervals: user_sent_at -> ai_finished_at
+2. fallback: started_at + prompting_seconds -> ended_at
 ```
 
 Human interval 当前定义为：

@@ -7,6 +7,7 @@ use crate::git::{delivery_link, git_info};
 use crate::models::{
     SessionRecord, SessionSource, SessionStatus, TestCommandRecord, TestCommandStatus, TimeFields,
 };
+use crate::parsers::{infer_ai_waiting_intervals, AiEvent, AiEventKind};
 use crate::util::{clamp, normalize_timestamp, seconds_between, stable_id, truncate};
 
 fn timestamp_of(event: &Value) -> Option<String> {
@@ -316,9 +317,11 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
         let mut cost_amount = 0.0_f64;
         let mut changed_files = BTreeSet::new();
         let mut test_commands = Vec::<TestCommandRecord>::new();
+        let mut ai_events = Vec::new();
 
         for event in &group {
             test_commands.extend(extract_test_commands(event));
+            let event_timestamp = timestamp_of(event);
             if let Some(path) = event
                 .get("cwd")
                 .or_else(|| event.get("projectPath"))
@@ -335,18 +338,36 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
             }
             let role = role_of(event);
             if role == "user" || role == "user_message" {
+                if let Some(timestamp) = &event_timestamp {
+                    ai_events.push(AiEvent {
+                        at: timestamp.clone(),
+                        kind: AiEventKind::User,
+                    });
+                }
                 user_message_count += 1;
                 if first_user_message.is_empty() {
                     first_user_message = message_text(event);
                 }
             }
             if role == "assistant" || role == "assistant_message" {
+                if let Some(timestamp) = &event_timestamp {
+                    ai_events.push(AiEvent {
+                        at: timestamp.clone(),
+                        kind: AiEventKind::Ai,
+                    });
+                }
                 assistant_message_count += 1;
             }
             if role.contains("tool")
                 || event.get("toolUseResult").is_some()
                 || event.get("tool_use_id").is_some()
             {
+                if let Some(timestamp) = &event_timestamp {
+                    ai_events.push(AiEvent {
+                        at: timestamp.clone(),
+                        kind: AiEventKind::Ai,
+                    });
+                }
                 tool_call_count += 1;
             }
             token_count += usage_tokens(event);
@@ -359,6 +380,7 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
         let started_at = timestamps.first().cloned().expect("timestamp exists");
         let ended_at = timestamps.last().cloned();
         let duration_seconds = seconds_between(&started_at, ended_at.as_deref());
+        let ai_waiting_intervals = infer_ai_waiting_intervals(ai_events);
         let prompting_seconds = clamp(
             user_message_count * 90,
             0,
@@ -369,7 +391,14 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
         } else {
             0
         };
-        let waiting_seconds = (duration_seconds - prompting_seconds).max(0);
+        let waiting_seconds = if ai_waiting_intervals.is_empty() {
+            (duration_seconds - prompting_seconds).max(0)
+        } else {
+            ai_waiting_intervals
+                .iter()
+                .map(|interval| interval.seconds)
+                .sum()
+        };
         let cwd_path = if cwd.is_empty() {
             project_from_claude_path(file_path)
         } else {
@@ -419,6 +448,7 @@ pub fn parse_claude_file(file_path: &Path) -> anyhow::Result<Vec<SessionRecord>>
             repair_seconds: 0,
             review_started_at: None,
             repair_started_at: None,
+            ai_waiting_intervals,
             review_intervals: Vec::new(),
             repair_intervals: Vec::new(),
             time_fields: TimeFields::default(),
@@ -463,5 +493,28 @@ mod tests {
             .changed_files
             .iter()
             .any(|file| file.ends_with("src-tauri/src/parsers/claude.rs")));
+    }
+
+    #[test]
+    fn infers_ai_waiting_turn_intervals() {
+        let path = Path::new("../fixtures/claude/ai-turns.jsonl");
+        let sessions = parse_claude_file(path).expect("fixture parses");
+        let session = sessions.first().expect("session");
+
+        assert_eq!(session.ai_waiting_intervals.len(), 2);
+        assert_eq!(
+            session.ai_waiting_intervals[0].user_sent_at,
+            "2026-05-19T02:00:00.000Z"
+        );
+        assert_eq!(
+            session.ai_waiting_intervals[0].ai_finished_at,
+            "2026-05-19T02:06:00.000Z"
+        );
+        assert_eq!(session.ai_waiting_intervals[0].seconds, 360);
+        assert_eq!(
+            session.ai_waiting_intervals[0].source,
+            crate::models::AiWaitingIntervalSource::Inferred
+        );
+        assert_eq!(session.ai_waiting_intervals[1].seconds, 420);
     }
 }

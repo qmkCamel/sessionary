@@ -137,13 +137,18 @@ let sessions: SessionRecord[] = [
     statusUpdatedAt: null,
     note: "Check whether the product docs and mockups still match the first runnable app.",
     confidence: 0.82,
-    changedFiles: ["docs/product-interaction-design.md", "docs/technical-architecture.md", "src/App.tsx"],
+    changedFiles: [
+      "docs/archive/2026-05-19-mvp/product-interaction-design.md",
+      "docs/technical-architecture.md",
+      "src/App.tsx",
+    ],
     promptingSeconds: 1380,
     waitingSeconds: 2040,
     reviewSeconds: 720,
     repairSeconds: 0,
     reviewStartedAt: null,
     repairStartedAt: null,
+    aiWaitingIntervals: [],
     reviewIntervals: [],
     repairIntervals: [],
     timeFields: {
@@ -158,8 +163,13 @@ let sessions: SessionRecord[] = [
     gitBranch: "main",
     gitDirty: true,
     delivery: deliveryFixture({
-      files: ["docs/product-interaction-design.md", "docs/technical-architecture.md", "src/App.tsx"],
-      diffSummary: "3 dirty file(s): docs/product-interaction-design.md, docs/technical-architecture.md, src/App.tsx. Diff: 3 files changed, 240 insertions(+), 42 deletions(-)",
+      files: [
+        "docs/archive/2026-05-19-mvp/product-interaction-design.md",
+        "docs/technical-architecture.md",
+        "src/App.tsx",
+      ],
+      diffSummary:
+        "3 dirty file(s): docs/archive/2026-05-19-mvp/product-interaction-design.md, docs/technical-architecture.md, src/App.tsx. Diff: 3 files changed, 240 insertions(+), 42 deletions(-)",
       committed: false,
       dirty: true,
       absorbed: false,
@@ -192,6 +202,7 @@ let sessions: SessionRecord[] = [
     repairSeconds: 300,
     reviewStartedAt: null,
     repairStartedAt: null,
+    aiWaitingIntervals: [],
     reviewIntervals: [],
     repairIntervals: [],
     timeFields: {
@@ -243,6 +254,7 @@ let sessions: SessionRecord[] = [
     repairSeconds: 480,
     reviewStartedAt: null,
     repairStartedAt: null,
+    aiWaitingIntervals: [],
     reviewIntervals: [],
     repairIntervals: [],
     timeFields: {
@@ -631,6 +643,11 @@ export function fallbackLedger(date = fallbackDate): DayLedger {
     statusUpdatedAt: session.statusUpdatedAt?.replace(fallbackDate, date) ?? null,
     reviewStartedAt: session.reviewStartedAt?.replace(fallbackDate, date) ?? null,
     repairStartedAt: session.repairStartedAt?.replace(fallbackDate, date) ?? null,
+    aiWaitingIntervals: session.aiWaitingIntervals.map((interval) => ({
+      ...interval,
+      userSentAt: interval.userSentAt.replace(fallbackDate, date),
+      aiFinishedAt: interval.aiFinishedAt.replace(fallbackDate, date)
+    })),
     reviewIntervals: session.reviewIntervals.map((interval) => ({
       ...interval,
       startedAt: interval.startedAt.replace(fallbackDate, date),

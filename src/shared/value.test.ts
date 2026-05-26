@@ -29,6 +29,7 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     repairSeconds: 0,
     reviewStartedAt: null,
     repairStartedAt: null,
+    aiWaitingIntervals: [],
     reviewIntervals: [],
     repairIntervals: [],
     timeFields: {

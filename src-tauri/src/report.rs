@@ -1290,6 +1290,7 @@ mod tests {
             repair_seconds,
             review_started_at: None,
             repair_started_at: None,
+            ai_waiting_intervals: Vec::new(),
             review_intervals: Vec::new(),
             repair_intervals: Vec::new(),
             time_fields: TimeFields::default(),

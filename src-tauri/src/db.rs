@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::credentials;
 use crate::models::{
+    AiWaitingIntervalRecord,
     AppSettings, DeliveryLink, IntegrationSettings, LanguageSetting, SessionPatch, SessionRecord,
     SessionSource, SessionStatus, SessionValue, SourceConfig, SourceStatus, TimeFieldState,
     TimeIntervalRecord,
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   repair_seconds INTEGER NOT NULL DEFAULT 0,
   review_started_at TEXT,
   repair_started_at TEXT,
+  ai_waiting_intervals_json TEXT NOT NULL DEFAULT '[]',
   review_intervals_json TEXT NOT NULL DEFAULT '[]',
   repair_intervals_json TEXT NOT NULL DEFAULT '[]',
   time_fields_json TEXT NOT NULL DEFAULT '{"prompting":"estimated","waiting":"estimated","review":"estimated","repair":"estimated"}',
@@ -111,6 +113,12 @@ pub fn init() -> anyhow::Result<()> {
     conn.execute_batch(SCHEMA)?;
     ensure_column(&conn, "sessions", "review_started_at", "TEXT")?;
     ensure_column(&conn, "sessions", "repair_started_at", "TEXT")?;
+    ensure_column(
+        &conn,
+        "sessions",
+        "ai_waiting_intervals_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
     ensure_column(
         &conn,
         "sessions",
@@ -305,6 +313,7 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     let status_text: String = row.get("status")?;
     let changed_files_json: String = row.get("changed_files_json")?;
     let time_fields_json: String = row.get("time_fields_json")?;
+    let ai_waiting_intervals_json: String = row.get("ai_waiting_intervals_json")?;
     let review_intervals_json: String = row.get("review_intervals_json")?;
     let repair_intervals_json: String = row.get("repair_intervals_json")?;
     let delivery_json: String = row.get("delivery_json")?;
@@ -335,6 +344,9 @@ fn session_from_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         repair_seconds: row.get("repair_seconds")?,
         review_started_at: row.get("review_started_at")?,
         repair_started_at: row.get("repair_started_at")?,
+        ai_waiting_intervals: parse_json::<Vec<AiWaitingIntervalRecord>>(
+            ai_waiting_intervals_json,
+        ),
         review_intervals: parse_json(review_intervals_json),
         repair_intervals: parse_json(repair_intervals_json),
         time_fields: parse_json(time_fields_json),
@@ -385,11 +397,11 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
               id, source, source_session_id, project_name, project_path, cwd, started_at, ended_at,
               duration_seconds, user_message_count, assistant_message_count, tool_call_count,
               token_count, cost_amount, status, status_updated_at, note, confidence, changed_files_json,
-              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, repair_started_at, review_intervals_json, repair_intervals_json, time_fields_json,
+              prompting_seconds, waiting_seconds, review_seconds, repair_seconds, review_started_at, repair_started_at, ai_waiting_intervals_json, review_intervals_json, repair_intervals_json, time_fields_json,
               summary, source_file, git_branch, git_dirty, delivery_json
             ) VALUES (
               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33
+              ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34
             )
             ON CONFLICT(id) DO UPDATE SET
               source=excluded.source,
@@ -411,6 +423,7 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
               waiting_seconds=CASE WHEN json_extract(sessions.time_fields_json, '$.waiting')='manual' THEN sessions.waiting_seconds ELSE excluded.waiting_seconds END,
               review_seconds=CASE WHEN json_extract(sessions.time_fields_json, '$.review')='manual' THEN sessions.review_seconds ELSE excluded.review_seconds END,
               repair_seconds=CASE WHEN json_extract(sessions.time_fields_json, '$.repair')='manual' THEN sessions.repair_seconds ELSE excluded.repair_seconds END,
+              ai_waiting_intervals_json=excluded.ai_waiting_intervals_json,
               summary=excluded.summary,
               source_file=excluded.source_file,
               git_branch=excluded.git_branch,
@@ -451,6 +464,7 @@ pub fn upsert_sessions(sessions: &[SessionRecord]) -> anyhow::Result<()> {
                 session.repair_seconds,
                 session.review_started_at,
                 session.repair_started_at,
+                serde_json::to_string(&session.ai_waiting_intervals)?,
                 serde_json::to_string(&session.review_intervals)?,
                 serde_json::to_string(&session.repair_intervals)?,
                 serde_json::to_string(&session.time_fields)?,

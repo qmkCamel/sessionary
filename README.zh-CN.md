@@ -118,13 +118,16 @@ npm test
 
 ## 项目文档
 
-- [产品定位](docs/product-positioning.md)
-- [MVP 能力](docs/mvp-capabilities.md)
 - [代码导览](docs/codebase-guide.md)
 - [技术架构](docs/technical-architecture.md)
-- [实现决策](docs/implementation-decisions.md)
+- [数据口径说明](docs/data-metric-definitions.md)
+- [开发者时间统计口径](docs/developer-time-metrics.md)
+- [面向用户的时间统计说明](docs/user-facing-time-metrics.md)
 - [发布准备](docs/release-readiness.md)
 - [路线图](docs/roadmap.md)
+
+历史规划快照保存在 [docs/archive](docs/archive/2026-05-19-mvp/README.md)。
+这些文档记录当时的产品判断和 MVP 设计，不作为当前实现口径。
 - [OpenSpec 项目约定](openspec/project.md)
 
 ## 贡献

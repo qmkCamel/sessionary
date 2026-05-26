@@ -167,6 +167,23 @@ pub struct TimeIntervalRecord {
     pub seconds: i64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiWaitingIntervalSource {
+    Event,
+    Inferred,
+    Estimated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiWaitingIntervalRecord {
+    pub user_sent_at: String,
+    pub ai_finished_at: String,
+    pub seconds: i64,
+    pub source: AiWaitingIntervalSource,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRecord {
@@ -195,6 +212,7 @@ pub struct SessionRecord {
     pub repair_seconds: i64,
     pub review_started_at: Option<String>,
     pub repair_started_at: Option<String>,
+    pub ai_waiting_intervals: Vec<AiWaitingIntervalRecord>,
     pub review_intervals: Vec<TimeIntervalRecord>,
     pub repair_intervals: Vec<TimeIntervalRecord>,
     pub time_fields: TimeFields,
