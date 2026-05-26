@@ -8,8 +8,8 @@ use crate::analytics::{
 };
 use crate::db;
 use crate::models::{
-    DeliveryInsight, DeliveryInsightKind, PlaybookItem, ReportResult, SessionRecord, SessionStatus,
-    SessionValueCategory, TaskType,
+    DeliveryInsight, DeliveryInsightKind, ParallelInsight, ParallelInsightKind, PlaybookItem,
+    PlaybookKind, ReportResult, SessionRecord, SessionStatus, SessionValueCategory, TaskType,
 };
 use crate::util::week_range;
 
@@ -25,48 +25,484 @@ fn human_time(seconds: i64) -> String {
     }
 }
 
-fn session_line(session: &SessionRecord) -> String {
-    let note = if session.note.trim().is_empty() {
-        String::new()
-    } else {
-        format!(" - {}", session.note.trim())
-    };
-    format!(
-        "- {} / {}: {} ({}, {} user prompts, {} tools){}",
-        session.project_name,
-        session.source.as_str(),
-        if session.summary.is_empty() {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportLocale {
+    En,
+    ZhCn,
+}
+
+impl ReportLocale {
+    fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("zh-CN") | Some("zh") => Self::ZhCn,
+            _ => Self::En,
+        }
+    }
+
+    fn text(self) -> ReportText {
+        ReportText { locale: self }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReportText {
+    locale: ReportLocale,
+}
+
+impl ReportText {
+    fn pick(self, en: &'static str, zh: &'static str) -> &'static str {
+        match self.locale {
+            ReportLocale::En => en,
+            ReportLocale::ZhCn => zh,
+        }
+    }
+
+    fn daily_title(self, date: &str) -> String {
+        match self.locale {
+            ReportLocale::En => format!("# Sessionary Daily Report - {date}"),
+            ReportLocale::ZhCn => format!("# Sessionary 日报 - {date}"),
+        }
+    }
+
+    fn weekly_title(self, week_start: &str, week_end: &str) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!("# Sessionary Weekly Report - {week_start} to {week_end}")
+            }
+            ReportLocale::ZhCn => {
+                format!("# Sessionary 周报 - {week_start} 至 {week_end}")
+            }
+        }
+    }
+
+    fn section(self, en: &'static str, zh: &'static str) -> String {
+        format!("## {}", self.pick(en, zh))
+    }
+
+    fn metric<T: std::fmt::Display>(self, en: &'static str, zh: &'static str, value: T) -> String {
+        format!("- {}: {value}", self.pick(en, zh))
+    }
+
+    fn session_count(self, count: usize) -> String {
+        match self.locale {
+            ReportLocale::En => format!("{count} session(s)"),
+            ReportLocale::ZhCn => format!("{count} 个 session"),
+        }
+    }
+
+    fn value_mix(self, high: usize, low: usize, repair: usize, discarded: usize) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!(
+                    "- Value mix: {high} high, {low} low, {repair} repair, {discarded} discarded"
+                )
+            }
+            ReportLocale::ZhCn => {
+                format!(
+                    "- 价值构成: 高价值 {high}，低价值 {low}，需修复 {repair}，已丢弃 {discarded}"
+                )
+            }
+        }
+    }
+
+    fn review_backlog(self, count: usize, seconds: i64) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!(
+                    "- Review backlog estimated: {count} session(s), {}",
+                    human_time(seconds)
+                )
+            }
+            ReportLocale::ZhCn => {
+                format!(
+                    "- Review backlog 估算: {count} 个 session，{}",
+                    human_time(seconds)
+                )
+            }
+        }
+    }
+
+    fn delivery_absorbed(self, absorbed: usize, total: usize) -> String {
+        match self.locale {
+            ReportLocale::En => format!("- Delivery absorbed: {absorbed}/{total} sessions"),
+            ReportLocale::ZhCn => format!("- 已吸收交付: {absorbed}/{total} 个 session"),
+        }
+    }
+
+    fn delivery_commits_dirty(self, committed: usize, dirty: usize) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!("- Delivery commits / dirty: {committed} committed, {dirty} dirty")
+            }
+            ReportLocale::ZhCn => {
+                format!("- 交付 commit / dirty: {committed} 个已提交，{dirty} 个仍 dirty")
+            }
+        }
+    }
+
+    fn pr_ci_issue(self, pr: usize, ci: usize, issues: usize) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!(
+                    "- PR / CI / Issue signals: {pr} PR, {ci} CI/local test, {issues} issue-linked"
+                )
+            }
+            ReportLocale::ZhCn => {
+                format!("- PR / CI / Issue 信号: {pr} 个 PR，{ci} 个 CI/本地测试，{issues} 个 issue 关联")
+            }
+        }
+    }
+
+    fn context_switches(self, total: usize, short: usize) -> String {
+        match self.locale {
+            ReportLocale::En => format!("- Context switches: {total} total, {short} short"),
+            ReportLocale::ZhCn => format!("- 上下文切换: 总计 {total} 次，短时 {short} 次"),
+        }
+    }
+
+    fn delivery_integrations(self, pr: usize, issues: usize, ci: usize, merged: usize) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!("- Delivery Integrations: {pr} PR, {issues} issue-linked, {ci} CI/local test signal(s), {merged} merged")
+            }
+            ReportLocale::ZhCn => {
+                format!("- 交付集成: {pr} 个 PR，{issues} 个 issue 关联，{ci} 个 CI/本地测试信号，{merged} 个已 merge")
+            }
+        }
+    }
+
+    fn success_rate(self, rate: f64, successful: usize, total: usize) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!(
+                    "- Success rate estimated: {} ({successful}/{total})",
+                    percent(rate)
+                )
+            }
+            ReportLocale::ZhCn => {
+                format!("- 成功率估算: {}（{successful}/{total}）", percent(rate))
+            }
+        }
+    }
+
+    fn cross_tool_sources(self, sources: usize, projects: usize) -> String {
+        match self.locale {
+            ReportLocale::En => {
+                format!("- Cross-tool sources: {sources}, cross-projects: {projects}")
+            }
+            ReportLocale::ZhCn => {
+                format!("- 跨工具来源: {sources}，跨项目: {projects}")
+            }
+        }
+    }
+
+    fn task_type_summary(
+        self,
+        task_type: TaskType,
+        session_count: usize,
+        successful_sessions: usize,
+        average_value_score: f64,
+    ) -> String {
+        match self.locale {
+            ReportLocale::En => format!(
+                "- {}: {} session(s), {} successful, avg score {:.0}",
+                self.task_type(task_type),
+                session_count,
+                successful_sessions,
+                average_value_score
+            ),
+            ReportLocale::ZhCn => format!(
+                "- {}: {} 个 session，{} 个成功，平均评分 {:.0}",
+                self.task_type(task_type),
+                session_count,
+                successful_sessions,
+                average_value_score
+            ),
+        }
+    }
+
+    fn value_category(self, category: SessionValueCategory) -> &'static str {
+        match self.locale {
+            ReportLocale::En => category.as_str(),
+            ReportLocale::ZhCn => match category {
+                SessionValueCategory::HighValue => "高价值",
+                SessionValueCategory::MixedValue => "混合价值",
+                SessionValueCategory::LowValue => "低价值",
+                SessionValueCategory::NeedsHumanRepair => "需要人工修复",
+                SessionValueCategory::Discarded => "已丢弃",
+                SessionValueCategory::Unreviewed => "未复盘",
+            },
+        }
+    }
+
+    fn status(self, status: SessionStatus) -> &'static str {
+        match self.locale {
+            ReportLocale::En => status.as_str(),
+            ReportLocale::ZhCn => match status {
+                SessionStatus::Unknown => "未知",
+                SessionStatus::Useful => "有用",
+                SessionStatus::NeedsReview => "待复盘",
+                SessionStatus::NeedsRepair => "需修复",
+                SessionStatus::Repaired => "已修复",
+                SessionStatus::Failed => "失败",
+                SessionStatus::Discarded => "已丢弃",
+            },
+        }
+    }
+
+    fn task_type(self, task_type: TaskType) -> &'static str {
+        match task_type {
+            TaskType::UiFrontend => self.pick("UI/frontend", "UI/前端"),
+            TaskType::Docs => self.pick("docs", "文档"),
+            TaskType::Tests => self.pick("tests", "测试"),
+            TaskType::Backend => self.pick("backend", "后端"),
+            TaskType::Delivery => self.pick("delivery", "交付"),
+            TaskType::Repair => self.pick("repair", "修复"),
+            TaskType::Unknown => self.pick("unknown", "未知"),
+        }
+    }
+
+    fn no_pr(self) -> &'static str {
+        self.pick("no PR", "无 PR")
+    }
+
+    fn no_issue(self) -> &'static str {
+        self.pick("no issue", "无 issue")
+    }
+
+    fn session_line(self, session: &SessionRecord) -> String {
+        let note = if session.note.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" - {}", session.note.trim())
+        };
+        let title = if session.summary.is_empty() {
             &session.source_session_id
         } else {
             &session.summary
-        },
-        human_time(session.duration_seconds),
-        session.user_message_count,
-        session.tool_call_count,
-        note
-    )
+        };
+        match self.locale {
+            ReportLocale::En => format!(
+                "- {} / {}: {} ({}, {} user prompts, {} tools){}",
+                session.project_name,
+                session.source.as_str(),
+                title,
+                human_time(session.duration_seconds),
+                session.user_message_count,
+                session.tool_call_count,
+                note
+            ),
+            ReportLocale::ZhCn => format!(
+                "- {} / {}: {}（{}，{} 条用户提示，{} 次工具调用）{}",
+                session.project_name,
+                session.source.as_str(),
+                title,
+                human_time(session.duration_seconds),
+                session.user_message_count,
+                session.tool_call_count,
+                note
+            ),
+        }
+    }
+
+    fn value_session_line(self, session: &SessionRecord) -> String {
+        let title = if session.summary.is_empty() {
+            &session.source_session_id
+        } else {
+            &session.summary
+        };
+        let cost = session
+            .cost_amount
+            .map(|cost| format!("${cost:.4}"))
+            .unwrap_or_else(|| self.pick("n/a", "无").to_string());
+        match self.locale {
+            ReportLocale::En => format!(
+                "- {} / {}: {} (value: {}, score: {}, cost: {}, tokens: {}, tools: {}, files: {})",
+                session.project_name,
+                session.source.as_str(),
+                title,
+                self.value_category(session.value.category),
+                session.value.score,
+                cost,
+                session.token_count.unwrap_or_default(),
+                session.tool_call_count,
+                session.changed_files.len()
+            ),
+            ReportLocale::ZhCn => format!(
+                "- {} / {}: {}（价值: {}，评分: {}，成本: {}，Tokens: {}，工具调用: {}，文件: {}）",
+                session.project_name,
+                session.source.as_str(),
+                title,
+                self.value_category(session.value.category),
+                session.value.score,
+                cost,
+                session.token_count.unwrap_or_default(),
+                session.tool_call_count,
+                session.changed_files.len()
+            ),
+        }
+    }
+
+    fn parallel_insight_line(self, insight: &ParallelInsight) -> String {
+        match insight.kind {
+            ParallelInsightKind::ParallelPayoff => match self.locale {
+                ReportLocale::En => format!(
+                    "- Parallel payoff: {} of AI waiting overlapped with review/repair across {} interval(s).",
+                    human_time(insight.seconds),
+                    insight.count
+                ),
+                ReportLocale::ZhCn => format!(
+                    "- 并行收益: {} AI waiting 与 review/repair 重叠，覆盖 {} 个区间。",
+                    human_time(insight.seconds),
+                    insight.count
+                ),
+            },
+            ParallelInsightKind::ReviewBottleneck => match self.locale {
+                ReportLocale::En => format!(
+                    "- Review bottleneck: {} session(s) have waited about {} for review/repair.",
+                    insight.count,
+                    human_time(insight.seconds)
+                ),
+                ReportLocale::ZhCn => format!(
+                    "- Review 瓶颈: {} 个 session 已等待约 {} 进入 review/repair。",
+                    insight.count,
+                    human_time(insight.seconds)
+                ),
+            },
+            ParallelInsightKind::ContextSwitching => match self.locale {
+                ReportLocale::En => format!(
+                    "- Context switching: {} short cross-project switch(es) detected.",
+                    insight.count
+                ),
+                ReportLocale::ZhCn => {
+                    format!("- 上下文切换: 检测到 {} 次短时跨项目切换。", insight.count)
+                }
+            },
+            ParallelInsightKind::LowParallelism => match self.locale {
+                ReportLocale::En => {
+                    format!("- Low parallelism: {} sessions ran mostly serially.", insight.count)
+                }
+                ReportLocale::ZhCn => {
+                    format!("- 并行度偏低: {} 个 session 基本串行运行。", insight.count)
+                }
+            },
+        }
+    }
+
+    fn delivery_insight_line(self, insight: &DeliveryInsight) -> String {
+        match insight.kind {
+            DeliveryInsightKind::UnabsorbedOutput => match self.locale {
+                ReportLocale::En => format!(
+                    "- Unabsorbed output: {} session(s) have delivery signals but are not absorbed.",
+                    insight.count
+                ),
+                ReportLocale::ZhCn => {
+                    format!("- 未吸收输出: {} 个 session 有交付信号但尚未 absorbed。", insight.count)
+                }
+            },
+            DeliveryInsightKind::DirtyAfterSession => match self.locale {
+                ReportLocale::En => format!(
+                    "- Dirty after session: {} session(s) still have local dirty changes.",
+                    insight.count
+                ),
+                ReportLocale::ZhCn => {
+                    format!("- Session 后仍 dirty: {} 个 session 仍有本地未提交改动。", insight.count)
+                }
+            },
+            DeliveryInsightKind::MissingTests => match self.locale {
+                ReportLocale::En => format!(
+                    "- Missing local test loop: {} file-changing session(s) have no recorded test command.",
+                    insight.count
+                ),
+                ReportLocale::ZhCn => format!(
+                    "- 缺少本地测试闭环: {} 个改动文件的 session 没有记录测试命令。",
+                    insight.count
+                ),
+            },
+            DeliveryInsightKind::LinkedDelivery => match self.locale {
+                ReportLocale::En => format!(
+                    "- Linked delivery: {} PR / issue attribution signal(s) found locally.",
+                    insight.count
+                ),
+                ReportLocale::ZhCn => {
+                    format!("- 已关联交付: 本地发现 {} 个 PR / issue 归因信号。", insight.count)
+                }
+            },
+        }
+    }
+
+    fn playbook_line(self, item: &PlaybookItem) -> String {
+        match self.locale {
+            ReportLocale::En => format!("- {}: {}", item.title, item.detail),
+            ReportLocale::ZhCn => match item.kind {
+                PlaybookKind::ReusePattern => {
+                    let source = item.source.map(|source| source.as_str()).unwrap_or("AI");
+                    let task = item
+                        .task_type
+                        .map(|task_type| self.task_type(task_type))
+                        .unwrap_or_else(|| self.task_type(TaskType::Unknown));
+                    format!(
+                        "- 复用 {} 处理 {}: 这个本地模式在当前复盘窗口中产出稳定。",
+                        source, task
+                    )
+                }
+                PlaybookKind::ClearReviewBacklog => "- 先清理 review backlog 再启动更多 agents: 多个已完成 session 仍在等待 review 或 repair。".to_string(),
+                PlaybookKind::AbsorbBeforeMoreAgents => "- 扩大并行前先吸收或暂存交付输出: 当前有本地代码改动尚未完全进入 review 闭环。".to_string(),
+                PlaybookKind::KeepParallelLimitSwitches => "- 保持并行，但限制短时切换: 并行工作已经可见；增加更多并发 session 前先检查短时切换。".to_string(),
+                PlaybookKind::AddTestLoop => "- 给改动文件的 session 绑定本地测试闭环: 部分代码改动 session 还没有记录测试命令。".to_string(),
+            },
+        }
+    }
+
+    fn delivery_session_line(self, session: &SessionRecord) -> String {
+        let pr = session
+            .delivery
+            .integration
+            .pull_request
+            .as_ref()
+            .and_then(|pull_request| pull_request.url.clone())
+            .unwrap_or_else(|| self.no_pr().to_string());
+        let issues = if session.delivery.integration.issues.is_empty() {
+            self.no_issue().to_string()
+        } else {
+            session
+                .delivery
+                .integration
+                .issues
+                .iter()
+                .map(|issue| issue.key.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        match self.locale {
+            ReportLocale::En => format!(
+                "- {} / {}: absorbed={}, commit={}, dirty={}, tests={}, pr={}, issues={}",
+                session.project_name,
+                session.source.as_str(),
+                session.delivery.absorbed,
+                session.delivery.committed_after_session,
+                session.delivery.dirty_after_session,
+                session.delivery.test_commands.len(),
+                pr,
+                issues
+            ),
+            ReportLocale::ZhCn => format!(
+                "- {} / {}: absorbed={}，commit={}，dirty={}，tests={}，pr={}，issues={}",
+                session.project_name,
+                session.source.as_str(),
+                session.delivery.absorbed,
+                session.delivery.committed_after_session,
+                session.delivery.dirty_after_session,
+                session.delivery.test_commands.len(),
+                pr,
+                issues
+            ),
+        }
+    }
 }
 
 fn value_session_line(session: &SessionRecord) -> String {
-    format!(
-        "- {} / {}: {} (value: {}, score: {}, cost: {}, tokens: {}, tools: {}, files: {})",
-        session.project_name,
-        session.source.as_str(),
-        if session.summary.is_empty() {
-            &session.source_session_id
-        } else {
-            &session.summary
-        },
-        session.value.category.as_str(),
-        session.value.score,
-        session
-            .cost_amount
-            .map(|cost| format!("${cost:.4}"))
-            .unwrap_or_else(|| "n/a".to_string()),
-        session.token_count.unwrap_or_default(),
-        session.tool_call_count,
-        session.changed_files.len()
-    )
+    ReportLocale::En.text().value_session_line(session)
 }
 
 fn total_human_seconds(sessions: &[SessionRecord]) -> i64 {
@@ -84,101 +520,9 @@ fn percent(value: f64) -> String {
     format!("{}%", (value * 100.0).round() as i64)
 }
 
-fn insight_line(insight: &crate::models::ParallelInsight) -> String {
-    match insight.kind {
-        crate::models::ParallelInsightKind::ParallelPayoff => format!(
-            "- Parallel payoff: {} of AI waiting overlapped with review/repair across {} interval(s).",
-            human_time(insight.seconds),
-            insight.count
-        ),
-        crate::models::ParallelInsightKind::ReviewBottleneck => format!(
-            "- Review bottleneck: {} session(s) have waited about {} for review/repair.",
-            insight.count,
-            human_time(insight.seconds)
-        ),
-        crate::models::ParallelInsightKind::ContextSwitching => format!(
-            "- Context switching: {} short cross-project switch(es) detected.",
-            insight.count
-        ),
-        crate::models::ParallelInsightKind::LowParallelism => format!(
-            "- Low parallelism: {} sessions ran mostly serially.",
-            insight.count
-        ),
-    }
-}
-
-fn delivery_insight_line(insight: &DeliveryInsight) -> String {
-    match insight.kind {
-        DeliveryInsightKind::UnabsorbedOutput => format!(
-            "- Unabsorbed output: {} session(s) have delivery signals but are not absorbed.",
-            insight.count
-        ),
-        DeliveryInsightKind::DirtyAfterSession => format!(
-            "- Dirty after session: {} session(s) still have local dirty changes.",
-            insight.count
-        ),
-        DeliveryInsightKind::MissingTests => format!(
-            "- Missing local test loop: {} file-changing session(s) have no recorded test command.",
-            insight.count
-        ),
-        DeliveryInsightKind::LinkedDelivery => format!(
-            "- Linked delivery: {} PR / issue attribution signal(s) found locally.",
-            insight.count
-        ),
-    }
-}
-
-fn task_type_label(task_type: TaskType) -> &'static str {
-    match task_type {
-        TaskType::UiFrontend => "UI/frontend",
-        TaskType::Docs => "docs",
-        TaskType::Tests => "tests",
-        TaskType::Backend => "backend",
-        TaskType::Delivery => "delivery",
-        TaskType::Repair => "repair",
-        TaskType::Unknown => "unknown",
-    }
-}
-
-fn playbook_line(item: &PlaybookItem) -> String {
-    format!("- {}: {}", item.title, item.detail)
-}
-
-fn delivery_session_line(session: &SessionRecord) -> String {
-    let pr = session
-        .delivery
-        .integration
-        .pull_request
-        .as_ref()
-        .and_then(|pull_request| pull_request.url.clone())
-        .unwrap_or_else(|| "no PR".to_string());
-    let issues = if session.delivery.integration.issues.is_empty() {
-        "no issue".to_string()
-    } else {
-        session
-            .delivery
-            .integration
-            .issues
-            .iter()
-            .map(|issue| issue.key.clone())
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    format!(
-        "- {} / {}: absorbed={}, commit={}, dirty={}, tests={}, pr={}, issues={}",
-        session.project_name,
-        session.source.as_str(),
-        session.delivery.absorbed,
-        session.delivery.committed_after_session,
-        session.delivery.dirty_after_session,
-        session.delivery.test_commands.len(),
-        pr,
-        issues
-    )
-}
-
-pub fn markdown_for(date: &str) -> anyhow::Result<String> {
+pub fn markdown_for(date: &str, locale: Option<&str>) -> anyhow::Result<String> {
     let ledger = build_day_ledger(date)?;
+    let text = ReportLocale::parse(locale).text();
     let useful = ledger
         .sessions
         .iter()
@@ -211,127 +555,146 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
         .collect::<Vec<_>>();
 
     let mut lines = vec![
-        format!("# Sessionary Daily Report - {}", ledger.metrics.date),
+        text.daily_title(&ledger.metrics.date),
         String::new(),
-        "## Summary".to_string(),
+        text.section("Summary", "摘要"),
         String::new(),
-        format!("- Projects: {}", ledger.metrics.project_count),
-        format!("- Sessions: {}", ledger.metrics.session_count),
-        format!(
-            "- AI waiting: {}",
+        text.metric("Projects", "项目", ledger.metrics.project_count),
+        text.metric("Sessions", "会话", ledger.metrics.session_count),
+        text.metric(
+            "AI waiting",
+            "AI waiting",
             human_time(total_metric_time(
                 ledger.metrics.ai_waiting_seconds_estimated,
-                ledger.metrics.ai_waiting_seconds_manual
-            ))
+                ledger.metrics.ai_waiting_seconds_manual,
+            )),
         ),
-        format!(
-            "- Prompting: {}",
+        text.metric(
+            "Prompting",
+            "Prompting",
             human_time(total_metric_time(
                 ledger.metrics.prompting_seconds_estimated,
-                ledger.metrics.prompting_seconds_manual
-            ))
+                ledger.metrics.prompting_seconds_manual,
+            )),
         ),
-        format!(
-            "- Review: {}",
+        text.metric(
+            "Review",
+            "Review",
             human_time(total_metric_time(
                 ledger.metrics.review_seconds_estimated,
-                ledger.metrics.review_seconds_manual
-            ))
+                ledger.metrics.review_seconds_manual,
+            )),
         ),
-        format!(
-            "- Repair: {}",
+        text.metric(
+            "Repair",
+            "Repair",
             human_time(total_metric_time(
                 ledger.metrics.repair_seconds_estimated,
-                ledger.metrics.repair_seconds_manual
-            ))
+                ledger.metrics.repair_seconds_manual,
+            )),
         ),
-        format!("- Tool calls: {}", ledger.metrics.tool_call_count),
-        format!("- Tokens: {}", ledger.metrics.token_count),
-        format!("- Cost: ${:.4}", ledger.metrics.cost_amount),
-        format!(
-            "- Value mix: {} high, {} low, {} repair, {} discarded",
+        text.metric("Tool calls", "工具调用", ledger.metrics.tool_call_count),
+        text.metric("Tokens", "Tokens", ledger.metrics.token_count),
+        text.metric(
+            "Cost",
+            "成本",
+            format!("${:.4}", ledger.metrics.cost_amount),
+        ),
+        text.value_mix(
             ledger.metrics.high_value_count,
             ledger.metrics.low_value_count,
             ledger.metrics.needs_repair_value_count,
-            ledger.metrics.discarded_value_count
+            ledger.metrics.discarded_value_count,
         ),
-        format!(
-            "- Parallel project time: {}",
-            human_time(ledger.metrics.parallel_seconds)
+        text.metric(
+            "Parallel project time",
+            "并行项目时间",
+            human_time(ledger.metrics.parallel_seconds),
         ),
-        format!(
-            "- Parallel project ratio estimated: {}",
-            percent(ledger.parallel_review.parallel_project_ratio)
+        text.metric(
+            "Parallel project ratio estimated",
+            "并行项目比例估算",
+            percent(ledger.parallel_review.parallel_project_ratio),
         ),
-        format!(
-            "- AI waiting / human review overlap estimated: {}",
-            human_time(ledger.parallel_review.ai_waiting_human_overlap_seconds)
+        text.metric(
+            "AI waiting / human review overlap estimated",
+            "AI waiting / 人工 review 重叠估算",
+            human_time(ledger.parallel_review.ai_waiting_human_overlap_seconds),
         ),
-        format!(
-            "- Review backlog estimated: {} session(s), {}",
+        text.review_backlog(
             ledger.parallel_review.review_backlog_session_count,
-            human_time(ledger.parallel_review.review_backlog_seconds)
+            ledger.parallel_review.review_backlog_seconds,
         ),
-        format!(
-            "- Delivery absorbed: {}/{} sessions",
-            ledger.delivery_review.absorbed_sessions, ledger.metrics.session_count
+        text.delivery_absorbed(
+            ledger.delivery_review.absorbed_sessions,
+            ledger.metrics.session_count,
         ),
-        format!(
-            "- Delivery commits / dirty: {} committed, {} dirty",
+        text.delivery_commits_dirty(
             ledger.delivery_review.sessions_with_commits,
-            ledger.delivery_review.sessions_with_dirty_changes
+            ledger.delivery_review.sessions_with_dirty_changes,
         ),
-        format!(
-            "- PR / CI / Issue signals: {} PR, {} CI/local test, {} issue-linked",
+        text.pr_ci_issue(
             ledger.delivery_review.sessions_with_pr,
             ledger.delivery_review.sessions_with_ci_signal,
-            ledger.delivery_review.sessions_with_issues
+            ledger.delivery_review.sessions_with_issues,
         ),
-        format!(
-            "- Context switches: {} total, {} short",
+        text.context_switches(
             ledger.parallel_review.context_switch_count,
-            ledger.parallel_review.short_context_switch_count
+            ledger.parallel_review.short_context_switch_count,
         ),
         String::new(),
-        "## Useful Sessions".to_string(),
+        text.section("Useful Sessions", "有价值的 Sessions"),
         String::new(),
     ];
 
     if useful.is_empty() {
-        lines.push("- None marked yet.".to_string());
+        lines.push(
+            text.pick("- None marked yet.", "- 还没有标记。")
+                .to_string(),
+        );
     } else {
-        lines.extend(useful.iter().map(|session| value_session_line(session)));
+        lines.extend(
+            useful
+                .iter()
+                .map(|session| text.value_session_line(session)),
+        );
     }
 
     lines.extend([
         String::new(),
-        "## Needs Follow-up".to_string(),
+        text.section("Needs Follow-up", "待跟进"),
         String::new(),
     ]);
     if follow_up.is_empty() {
-        lines.push("- Nothing open.".to_string());
+        lines.push(text.pick("- Nothing open.", "- 没有待处理项。").to_string());
     } else {
-        lines.extend(follow_up.iter().map(|session| session_line(session)));
+        lines.extend(follow_up.iter().map(|session| text.session_line(session)));
     }
 
     lines.extend([
         String::new(),
-        "## Failed / Discarded".to_string(),
+        text.section("Failed / Discarded", "失败 / 已丢弃"),
         String::new(),
     ]);
     if failed.is_empty() {
-        lines.push("- None.".to_string());
+        lines.push(text.pick("- None.", "- 无。").to_string());
     } else {
-        lines.extend(failed.iter().map(|session| session_line(session)));
+        lines.extend(failed.iter().map(|session| text.session_line(session)));
     }
 
     lines.extend([
         String::new(),
-        "## Parallel Review".to_string(),
+        text.section("Parallel Review", "并行复盘"),
         String::new(),
     ]);
     if ledger.overlaps.is_empty() {
-        lines.push("- No cross-project overlap detected.".to_string());
+        lines.push(
+            text.pick(
+                "- No cross-project overlap detected.",
+                "- 未检测到跨项目 overlap。",
+            )
+            .to_string(),
+        );
     } else {
         lines.extend(ledger.overlaps.iter().map(|overlap| {
             format!(
@@ -344,104 +707,147 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
         }));
     }
     if ledger.parallel_review.insights.is_empty() {
-        lines.push("- No parallel workflow issues detected beyond current estimates.".to_string());
+        lines.push(
+            text.pick(
+                "- No parallel workflow issues detected beyond current estimates.",
+                "- 当前估算未发现额外并行 workflow 问题。",
+            )
+            .to_string(),
+        );
     } else {
-        lines.extend(ledger.parallel_review.insights.iter().map(insight_line));
+        lines.extend(
+            ledger
+                .parallel_review
+                .insights
+                .iter()
+                .map(|insight| text.parallel_insight_line(insight)),
+        );
     }
 
     lines.extend([
         String::new(),
-        "## Delivery Review".to_string(),
+        text.section("Delivery Review", "交付复盘"),
         String::new(),
-        format!(
-            "- File-changing sessions: {}",
-            ledger.delivery_review.sessions_with_file_changes
+        text.metric(
+            "File-changing sessions",
+            "改动文件的 sessions",
+            ledger.delivery_review.sessions_with_file_changes,
         ),
-        format!(
-            "- Absorbed sessions: {}",
-            ledger.delivery_review.absorbed_sessions
+        text.metric(
+            "Absorbed sessions",
+            "已吸收 sessions",
+            ledger.delivery_review.absorbed_sessions,
         ),
-        format!(
-            "- Commit signals: {} session(s)",
-            ledger.delivery_review.sessions_with_commits
+        text.metric(
+            "Commit signals",
+            "Commit 信号",
+            text.session_count(ledger.delivery_review.sessions_with_commits),
         ),
-        format!(
-            "- Dirty after session: {} session(s)",
-            ledger.delivery_review.sessions_with_dirty_changes
+        text.metric(
+            "Dirty after session",
+            "Session 后仍 dirty",
+            text.session_count(ledger.delivery_review.sessions_with_dirty_changes),
         ),
-        format!(
-            "- Local test commands: {} session(s)",
-            ledger.delivery_review.sessions_with_tests
+        text.metric(
+            "Local test commands",
+            "本地测试命令",
+            text.session_count(ledger.delivery_review.sessions_with_tests),
         ),
-        format!(
-            "- Delivery Integrations: {} PR, {} issue-linked, {} CI/local test signal(s), {} merged",
+        text.delivery_integrations(
             ledger.delivery_review.sessions_with_pr,
             ledger.delivery_review.sessions_with_issues,
             ledger.delivery_review.sessions_with_ci_signal,
-            ledger.delivery_review.merged_sessions
+            ledger.delivery_review.merged_sessions,
         ),
     ]);
     if ledger.delivery_review.insights.is_empty() {
-        lines.push("- No delivery absorption issues detected from local signals.".to_string());
+        lines.push(
+            text.pick(
+                "- No delivery absorption issues detected from local signals.",
+                "- 本地信号未检测到交付吸收问题。",
+            )
+            .to_string(),
+        );
     } else {
         lines.extend(
             ledger
                 .delivery_review
                 .insights
                 .iter()
-                .map(delivery_insight_line),
+                .map(|insight| text.delivery_insight_line(insight)),
         );
     }
-    lines.extend(ledger.sessions.iter().take(8).map(delivery_session_line));
+    lines.extend(
+        ledger
+            .sessions
+            .iter()
+            .take(8)
+            .map(|session| text.delivery_session_line(session)),
+    );
 
     lines.extend([
         String::new(),
-        "## AI Dev Operating Review".to_string(),
+        text.section("AI Dev Operating Review", "AI 开发运营复盘"),
         String::new(),
-        format!(
-            "- Success rate estimated: {} ({}/{})",
-            percent(ledger.operating_review.success_rate),
+        text.success_rate(
+            ledger.operating_review.success_rate,
             ledger.operating_review.successful_sessions,
-            ledger.operating_review.total_sessions
+            ledger.operating_review.total_sessions,
         ),
-        format!(
-            "- Cross-tool sources: {}, cross-projects: {}",
+        text.cross_tool_sources(
             ledger.operating_review.cross_tool_source_count,
-            ledger.operating_review.cross_project_count
+            ledger.operating_review.cross_project_count,
         ),
     ]);
     if ledger.operating_review.task_types.is_empty() {
-        lines.push("- No task type signals yet.".to_string());
+        lines.push(
+            text.pick("- No task type signals yet.", "- 暂无任务类型信号。")
+                .to_string(),
+        );
     } else {
         lines.extend(ledger.operating_review.task_types.iter().map(|task| {
-            format!(
-                "- {}: {} session(s), {} successful, avg score {:.0}",
-                task_type_label(task.task_type),
+            text.task_type_summary(
+                task.task_type,
                 task.session_count,
                 task.successful_sessions,
-                task.average_value_score
+                task.average_value_score,
             )
         }));
     }
     if ledger.operating_review.playbook.is_empty() {
-        lines.push("- No delegation playbook items yet.".to_string());
+        lines.push(
+            text.pick(
+                "- No delegation playbook items yet.",
+                "- 暂无 delegation playbook 项。",
+            )
+            .to_string(),
+        );
     } else {
-        lines.extend(ledger.operating_review.playbook.iter().map(playbook_line));
+        lines.extend(
+            ledger
+                .operating_review
+                .playbook
+                .iter()
+                .map(|item| text.playbook_line(item)),
+        );
     }
 
     lines.extend([
         String::new(),
-        "## Tomorrow Carry-over".to_string(),
+        text.section("Tomorrow Carry-over", "明日延续"),
         String::new(),
     ]);
     if follow_up.is_empty() {
-        lines.push("- No carry-over sessions.".to_string());
+        lines.push(
+            text.pick("- No carry-over sessions.", "- 没有延续到明日的 sessions。")
+                .to_string(),
+        );
     } else {
         lines.extend(follow_up.iter().map(|session| {
             format!(
                 "- {}: {} - {}",
                 session.project_name,
-                session.status.as_str().replace('_', " "),
+                text.status(session.status),
                 session.summary
             )
         }));
@@ -451,8 +857,9 @@ pub fn markdown_for(date: &str) -> anyhow::Result<String> {
     Ok(lines.join("\n"))
 }
 
-pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
+pub fn weekly_markdown_for(date: &str, locale: Option<&str>) -> anyhow::Result<String> {
     db::init()?;
+    let text = ReportLocale::parse(locale).text();
     let (week_start, week_end, start_iso, end_iso) = week_range(date)?;
     let mut sessions = db::sessions_between(&start_iso, &end_iso)?;
     sessions.sort_by(|left, right| left.started_at.cmp(&right.started_at));
@@ -541,199 +948,289 @@ pub fn weekly_markdown_for(date: &str) -> anyhow::Result<String> {
 
     let human_seconds = total_human_seconds(&sessions);
     let workflow_note = if sessions.is_empty() {
-        "No local sessions found in this week.".to_string()
+        text.pick(
+            "No local sessions found in this week.",
+            "本周没有找到本地 sessions。",
+        )
+        .to_string()
     } else if review_seconds + repair_seconds > waiting_seconds {
-        "Review and repair time exceeded AI waiting time; the workflow is likely bottlenecked after sessions finish.".to_string()
+        text.pick(
+            "Review and repair time exceeded AI waiting time; the workflow is likely bottlenecked after sessions finish.",
+            "Review 和 repair 时间超过 AI waiting 时间；workflow 很可能在 session 完成后形成瓶颈。",
+        )
+        .to_string()
     } else if repair_seconds > 0 {
-        "Repair exists but is not dominating the week yet; inspect needs repair sessions first."
-            .to_string()
+        text.pick(
+            "Repair exists but is not dominating the week yet; inspect needs repair sessions first.",
+            "本周存在 repair，但尚未主导整体时间；先检查 needs repair sessions。",
+        )
+        .to_string()
     } else {
-        "Review and repair did not dominate this week based on current estimates.".to_string()
+        text.pick(
+            "Review and repair did not dominate this week based on current estimates.",
+            "按当前估算，review 和 repair 本周没有主导整体时间。",
+        )
+        .to_string()
     };
 
     let mut lines = vec![
-        format!(
-            "# Sessionary Weekly Report - {} to {}",
-            week_start, week_end
-        ),
+        text.weekly_title(&week_start, &week_end),
         String::new(),
-        "## Summary".to_string(),
+        text.section("Summary", "摘要"),
         String::new(),
-        format!("- Projects: {project_count}"),
-        format!("- Sessions: {}", sessions.len()),
-        format!("- Prompting: {}", human_time(prompting_seconds)),
-        format!("- AI waiting: {}", human_time(waiting_seconds)),
-        format!("- Review: {}", human_time(review_seconds)),
-        format!("- Repair: {}", human_time(repair_seconds)),
-        format!("- Human time: {}", human_time(human_seconds)),
-        format!("- Parallel project time: {}", human_time(parallel_seconds)),
-        format!("- Tool calls: {tool_call_count}"),
-        format!("- Tokens: {token_count}"),
-        format!("- Cost: ${cost_amount:.4}"),
-        format!(
-            "- Delivery absorbed: {}/{} sessions",
-            delivery_review.absorbed_sessions,
-            sessions.len()
+        text.metric("Projects", "项目", project_count),
+        text.metric("Sessions", "会话", sessions.len()),
+        text.metric("Prompting", "Prompting", human_time(prompting_seconds)),
+        text.metric("AI waiting", "AI waiting", human_time(waiting_seconds)),
+        text.metric("Review", "Review", human_time(review_seconds)),
+        text.metric("Repair", "Repair", human_time(repair_seconds)),
+        text.metric("Human time", "人工时间", human_time(human_seconds)),
+        text.metric(
+            "Parallel project time",
+            "并行项目时间",
+            human_time(parallel_seconds),
         ),
-        format!(
-            "- PR / CI / Issue signals: {} PR, {} CI/local test, {} issue-linked",
+        text.metric("Tool calls", "工具调用", tool_call_count),
+        text.metric("Tokens", "Tokens", token_count),
+        text.metric("Cost", "成本", format!("${cost_amount:.4}")),
+        text.delivery_absorbed(delivery_review.absorbed_sessions, sessions.len()),
+        text.pr_ci_issue(
             delivery_review.sessions_with_pr,
             delivery_review.sessions_with_ci_signal,
-            delivery_review.sessions_with_issues
+            delivery_review.sessions_with_issues,
         ),
         String::new(),
-        "## Most Valuable Sessions".to_string(),
+        text.section("Most Valuable Sessions", "最有价值的 Sessions"),
         String::new(),
     ];
 
     if top_value.is_empty() {
-        lines.push("- No high-value sessions marked yet.".to_string());
+        lines.push(
+            text.pick(
+                "- No high-value sessions marked yet.",
+                "- 还没有标记高价值 sessions。",
+            )
+            .to_string(),
+        );
     } else {
-        lines.extend(top_value.iter().map(value_session_line));
+        lines.extend(
+            top_value
+                .iter()
+                .map(|session| text.value_session_line(session)),
+        );
     }
 
     lines.extend([
         String::new(),
-        "## Most Wasteful Sessions".to_string(),
+        text.section("Most Wasteful Sessions", "最浪费的 Sessions"),
         String::new(),
     ]);
     if waste.is_empty() {
-        lines.push("- No obvious waste sessions based on current marks.".to_string());
+        lines.push(
+            text.pick(
+                "- No obvious waste sessions based on current marks.",
+                "- 按当前标记没有明显浪费的 sessions。",
+            )
+            .to_string(),
+        );
     } else {
-        lines.extend(waste.iter().map(value_session_line));
+        lines.extend(waste.iter().map(|session| text.value_session_line(session)));
     }
 
     lines.extend([
         String::new(),
-        "## Workflow Notes".to_string(),
+        text.section("Workflow Notes", "Workflow 备注"),
         String::new(),
         format!("- {workflow_note}"),
     ]);
     lines.extend([
         String::new(),
-        "## Parallel Review".to_string(),
+        text.section("Parallel Review", "并行复盘"),
         String::new(),
-        format!(
-            "- Parallel project ratio estimated: {}",
-            percent(parallel_review.parallel_project_ratio)
+        text.metric(
+            "Parallel project ratio estimated",
+            "并行项目比例估算",
+            percent(parallel_review.parallel_project_ratio),
         ),
-        format!(
-            "- AI waiting / human review overlap estimated: {}",
-            human_time(parallel_review.ai_waiting_human_overlap_seconds)
+        text.metric(
+            "AI waiting / human review overlap estimated",
+            "AI waiting / 人工 review 重叠估算",
+            human_time(parallel_review.ai_waiting_human_overlap_seconds),
         ),
-        format!(
-            "- Review backlog estimated: {} session(s), {}",
+        text.review_backlog(
             parallel_review.review_backlog_session_count,
-            human_time(parallel_review.review_backlog_seconds)
+            parallel_review.review_backlog_seconds,
         ),
-        format!(
-            "- Context switches: {} total, {} short",
-            parallel_review.context_switch_count, parallel_review.short_context_switch_count
+        text.context_switches(
+            parallel_review.context_switch_count,
+            parallel_review.short_context_switch_count,
         ),
     ]);
     if parallel_review.insights.is_empty() {
-        lines.push("- No parallel workflow issues detected beyond current estimates.".to_string());
+        lines.push(
+            text.pick(
+                "- No parallel workflow issues detected beyond current estimates.",
+                "- 当前估算未发现额外并行 workflow 问题。",
+            )
+            .to_string(),
+        );
     } else {
-        lines.extend(parallel_review.insights.iter().map(insight_line));
+        lines.extend(
+            parallel_review
+                .insights
+                .iter()
+                .map(|insight| text.parallel_insight_line(insight)),
+        );
     }
 
     lines.extend([
         String::new(),
-        "## Delivery Review".to_string(),
+        text.section("Delivery Review", "交付复盘"),
         String::new(),
-        format!(
-            "- File-changing sessions: {}",
-            delivery_review.sessions_with_file_changes
+        text.metric(
+            "File-changing sessions",
+            "改动文件的 sessions",
+            delivery_review.sessions_with_file_changes,
         ),
-        format!(
-            "- Absorbed sessions: {}",
-            delivery_review.absorbed_sessions
+        text.metric(
+            "Absorbed sessions",
+            "已吸收 sessions",
+            delivery_review.absorbed_sessions,
         ),
-        format!(
-            "- Commit signals: {} session(s)",
-            delivery_review.sessions_with_commits
+        text.metric(
+            "Commit signals",
+            "Commit 信号",
+            text.session_count(delivery_review.sessions_with_commits),
         ),
-        format!(
-            "- Dirty after session: {} session(s)",
-            delivery_review.sessions_with_dirty_changes
+        text.metric(
+            "Dirty after session",
+            "Session 后仍 dirty",
+            text.session_count(delivery_review.sessions_with_dirty_changes),
         ),
-        format!(
-            "- Delivery Integrations: {} PR, {} issue-linked, {} CI/local test signal(s), {} merged",
+        text.delivery_integrations(
             delivery_review.sessions_with_pr,
             delivery_review.sessions_with_issues,
             delivery_review.sessions_with_ci_signal,
-            delivery_review.merged_sessions
+            delivery_review.merged_sessions,
         ),
     ]);
     if delivery_review.insights.is_empty() {
-        lines.push("- No delivery absorption issues detected from local signals.".to_string());
+        lines.push(
+            text.pick(
+                "- No delivery absorption issues detected from local signals.",
+                "- 本地信号未检测到交付吸收问题。",
+            )
+            .to_string(),
+        );
     } else {
-        lines.extend(delivery_review.insights.iter().map(delivery_insight_line));
+        lines.extend(
+            delivery_review
+                .insights
+                .iter()
+                .map(|insight| text.delivery_insight_line(insight)),
+        );
     }
-    lines.extend(sessions.iter().take(10).map(delivery_session_line));
+    lines.extend(
+        sessions
+            .iter()
+            .take(10)
+            .map(|session| text.delivery_session_line(session)),
+    );
 
     lines.extend([
         String::new(),
-        "## AI Dev Operating Review".to_string(),
+        text.section("AI Dev Operating Review", "AI 开发运营复盘"),
         String::new(),
-        format!(
-            "- Success rate estimated: {} ({}/{})",
-            percent(operating_review.success_rate),
+        text.success_rate(
+            operating_review.success_rate,
             operating_review.successful_sessions,
-            operating_review.total_sessions
+            operating_review.total_sessions,
         ),
-        format!(
-            "- Cross-tool sources: {}, cross-projects: {}",
-            operating_review.cross_tool_source_count, operating_review.cross_project_count
+        text.cross_tool_sources(
+            operating_review.cross_tool_source_count,
+            operating_review.cross_project_count,
         ),
     ]);
     if operating_review.tool_performance.is_empty() {
-        lines.push("- No tool performance signals yet.".to_string());
+        lines.push(
+            text.pick("- No tool performance signals yet.", "- 暂无工具表现信号。")
+                .to_string(),
+        );
     } else {
-        lines.extend(operating_review.tool_performance.iter().map(|tool| {
-            format!(
-                "- {}: {} session(s), {} successful, avg score {:.0}, top task {}",
-                tool.source.as_str(),
-                tool.session_count,
-                tool.successful_sessions,
-                tool.average_value_score,
-                tool.top_task_type.map(task_type_label).unwrap_or("unknown")
-            )
-        }));
+        lines.extend(
+            operating_review
+                .tool_performance
+                .iter()
+                .map(|tool| match text.locale {
+                    ReportLocale::En => format!(
+                        "- {}: {} session(s), {} successful, avg score {:.0}, top task {}",
+                        tool.source.as_str(),
+                        tool.session_count,
+                        tool.successful_sessions,
+                        tool.average_value_score,
+                        tool.top_task_type
+                            .map(|task_type| text.task_type(task_type))
+                            .unwrap_or_else(|| text.task_type(TaskType::Unknown))
+                    ),
+                    ReportLocale::ZhCn => format!(
+                        "- {}: {} 个 session，{} 个成功，平均评分 {:.0}，主要任务 {}",
+                        tool.source.as_str(),
+                        tool.session_count,
+                        tool.successful_sessions,
+                        tool.average_value_score,
+                        tool.top_task_type
+                            .map(|task_type| text.task_type(task_type))
+                            .unwrap_or_else(|| text.task_type(TaskType::Unknown))
+                    ),
+                }),
+        );
     }
     if operating_review.task_types.is_empty() {
-        lines.push("- No task type signals yet.".to_string());
+        lines.push(
+            text.pick("- No task type signals yet.", "- 暂无任务类型信号。")
+                .to_string(),
+        );
     } else {
         lines.extend(operating_review.task_types.iter().map(|task| {
-            format!(
-                "- {}: {} session(s), {} successful, avg score {:.0}",
-                task_type_label(task.task_type),
+            text.task_type_summary(
+                task.task_type,
                 task.session_count,
                 task.successful_sessions,
-                task.average_value_score
+                task.average_value_score,
             )
         }));
     }
     if operating_review.playbook.is_empty() {
-        lines.push("- No delegation playbook items yet.".to_string());
+        lines.push(
+            text.pick(
+                "- No delegation playbook items yet.",
+                "- 暂无 delegation playbook 项。",
+            )
+            .to_string(),
+        );
     } else {
-        lines.extend(operating_review.playbook.iter().map(playbook_line));
+        lines.extend(
+            operating_review
+                .playbook
+                .iter()
+                .map(|item| text.playbook_line(item)),
+        );
     }
     lines.push(String::new());
 
     Ok(lines.join("\n"))
 }
 
-pub fn build_report(date: &str) -> anyhow::Result<ReportResult> {
+pub fn build_report(date: &str, locale: Option<&str>) -> anyhow::Result<ReportResult> {
     Ok(ReportResult {
-        markdown: markdown_for(date)?,
+        markdown: markdown_for(date, locale)?,
         exported_path: None,
     })
 }
 
-pub fn build_weekly_report(date: &str) -> anyhow::Result<ReportResult> {
+pub fn build_weekly_report(date: &str, locale: Option<&str>) -> anyhow::Result<ReportResult> {
     Ok(ReportResult {
-        markdown: weekly_markdown_for(date)?,
+        markdown: weekly_markdown_for(date, locale)?,
         exported_path: None,
     })
 }
@@ -813,6 +1310,47 @@ mod tests {
 
         assert!(line.contains("score:"));
         assert!(line.contains("$0.4200"));
+    }
+
+    #[test]
+    fn report_locale_translates_daily_markdown_text() {
+        let text = ReportLocale::parse(Some("zh-CN")).text();
+        let record = session(SessionStatus::Useful, Some(0.42), 0);
+        let line = text.value_session_line(&record);
+
+        assert_eq!(
+            text.daily_title("2026-05-24"),
+            "# Sessionary 日报 - 2026-05-24"
+        );
+        assert_eq!(text.section("Summary", "摘要"), "## 摘要");
+        assert!(text.review_backlog(2, 1800).contains("Review backlog 估算"));
+        assert!(line.contains("Implemented a useful change"));
+        assert!(line.contains("价值: 高价值"));
+    }
+
+    #[test]
+    fn report_locale_translates_weekly_markdown_text() {
+        let text = ReportLocale::parse(Some("zh-CN")).text();
+
+        assert_eq!(
+            text.weekly_title("2026-05-18", "2026-05-24"),
+            "# Sessionary 周报 - 2026-05-18 至 2026-05-24"
+        );
+        assert_eq!(
+            text.section("Most Valuable Sessions", "最有价值的 Sessions"),
+            "## 最有价值的 Sessions"
+        );
+        assert!(text.success_rate(0.75, 3, 4).contains("成功率估算: 75%"));
+    }
+
+    #[test]
+    fn unknown_report_locale_falls_back_to_english() {
+        let text = ReportLocale::parse(Some("fr")).text();
+
+        assert_eq!(
+            text.daily_title("2026-05-24"),
+            "# Sessionary Daily Report - 2026-05-24"
+        );
     }
 
     #[test]

@@ -99,11 +99,11 @@ export async function getReleaseReadiness(): Promise<ReleaseReadinessResult> {
 }
 
 export async function generateReport(date: string, locale: Locale = "en"): Promise<ReportResult> {
-  return invokeOrFallback("generate_report", { date }, () => fallbackReport(date, locale));
+  return invokeOrFallback("generate_report", { date, locale }, () => fallbackReport(date, locale));
 }
 
 export async function generateWeeklyReport(date: string, locale: Locale = "en"): Promise<ReportResult> {
-  return invokeOrFallback("generate_weekly_report", { date }, () => fallbackWeeklyReport(date, locale));
+  return invokeOrFallback("generate_weekly_report", { date, locale }, () => fallbackWeeklyReport(date, locale));
 }
 
 export async function exportReport(date: string, markdown: string, locale: Locale = "en"): Promise<ReportResult> {

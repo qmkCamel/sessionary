@@ -364,13 +364,13 @@ export function App() {
         : await generateReport(ledger.metrics.date, locale);
     setMarkdown(result.markdown);
     setExportedPath(result.exportedPath);
-    setRenderedReportKey(`${reportMode}:${ledger.metrics.date}`);
+    setRenderedReportKey(`${reportMode}:${ledger.metrics.date}:${locale}`);
   };
 
   useEffect(() => {
-    const reportKey = ledger ? `${reportMode}:${ledger.metrics.date}` : "";
+    const reportKey = ledger ? `${reportMode}:${ledger.metrics.date}:${locale}` : "";
     if (view === "report" && ledger && renderedReportKey !== reportKey) void refreshReport();
-  }, [view, ledger?.metrics.date, reportMode, renderedReportKey]);
+  }, [view, ledger?.metrics.date, reportMode, locale, renderedReportKey]);
 
   if (settingsState && !settingsState.onboardingCompleted) {
     return (

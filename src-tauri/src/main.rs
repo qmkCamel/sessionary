@@ -114,8 +114,8 @@ fn get_release_readiness() -> Result<ReleaseReadinessResult, String> {
 }
 
 #[tauri::command]
-fn generate_report(date: String) -> Result<ReportResult, String> {
-    report::build_report(&date).map_err(|error| error.to_string())
+fn generate_report(date: String, locale: Option<String>) -> Result<ReportResult, String> {
+    report::build_report(&date, locale.as_deref()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -124,8 +124,8 @@ fn export_report(date: String, markdown: String) -> Result<ReportResult, String>
 }
 
 #[tauri::command]
-fn generate_weekly_report(date: String) -> Result<ReportResult, String> {
-    report::build_weekly_report(&date).map_err(|error| error.to_string())
+fn generate_weekly_report(date: String, locale: Option<String>) -> Result<ReportResult, String> {
+    report::build_weekly_report(&date, locale.as_deref()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
