@@ -3,7 +3,7 @@ import type { DayLedger, OverlapInterval, SessionRecord } from "../shared/types"
 import type { RangeSelection, ZoomMinutes } from "../app/types";
 import { sourceLabels } from "../app/labels";
 import { secondsLabel, timeLabel } from "../app/format";
-import { dayBounds, overlapsEqual, positionFor } from "../app/timeline";
+import { dayBounds, overlapsEqual, positionFor, visibleSessionInterval } from "../app/timeline";
 import { useTranslation } from "../app/translation";
 import { EmptyState } from "./shared";
 
@@ -143,19 +143,23 @@ export function TimelineCanvas({
               }}
               onMouseLeave={clearDrag}
             >
-              {sessions.map((session) => (
-                <button
-                  key={session.id}
-                  className={`timeline-block ${session.source} ${session.status} ${selectedId === session.id ? "selected" : ""}`}
-                  style={positionFor(session.startedAt, session.endedAt, bounds)}
-                  title={`${sourceLabels[session.source]} · ${timeLabel(session.startedAt, t)}-${timeLabel(session.endedAt, t)} · ${session.toolCallCount} ${t("common.tools")}`}
-                  onMouseDown={(event) => event.stopPropagation()}
-                  onClick={() => onSelect(session)}
-                >
-                  <span>{session.userMessageCount}</span>
-                  <small>{secondsLabel(session.durationSeconds)}</small>
-                </button>
-              ))}
+              {sessions.map((session) => {
+                const visible = visibleSessionInterval(session, bounds);
+                if (!visible) return null;
+                return (
+                  <button
+                    key={session.id}
+                    className={`timeline-block ${session.source} ${session.status} ${selectedId === session.id ? "selected" : ""}`}
+                    style={positionFor(visible.startedAt, visible.endedAt, bounds)}
+                    title={`${sourceLabels[session.source]} · ${timeLabel(visible.startedAt, t)}-${timeLabel(visible.endedAt, t)} · ${session.toolCallCount} ${t("common.tools")}`}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={() => onSelect(session)}
+                  >
+                    <span>{session.userMessageCount}</span>
+                    <small>{secondsLabel(visible.seconds)}</small>
+                  </button>
+                );
+              })}
             </div>
           </div>
         ))}

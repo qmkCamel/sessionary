@@ -76,6 +76,66 @@ fn content_to_text(value: &Value) -> String {
     }
 }
 
+fn is_context_user_message(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("<environment_context>")
+        || trimmed.starts_with("# AGENTS.md instructions")
+        || trimmed.starts_with("<INSTRUCTIONS>")
+}
+
+fn capture_summary_candidate(summary: &mut String, candidate: String) {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() || is_context_user_message(trimmed) || !summary.is_empty() {
+        return;
+    }
+    *summary = trimmed.to_string();
+}
+
+fn read_codex_thread_name(index_path: &Path, session_id: &str) -> Option<String> {
+    let content = fs::read_to_string(index_path).ok()?;
+    let mut selected: Option<(String, String)> = None;
+
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("id").and_then(Value::as_str) != Some(session_id) {
+            continue;
+        }
+        let Some(thread_name) = value
+            .get("thread_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let updated_at = value
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if selected
+            .as_ref()
+            .map_or(true, |(current_updated_at, _)| updated_at >= *current_updated_at)
+        {
+            selected = Some((updated_at, thread_name.to_string()));
+        }
+    }
+
+    selected.map(|(_, thread_name)| thread_name)
+}
+
+fn codex_thread_name(session_id: &str) -> Option<String> {
+    let index_path = dirs::home_dir()?.join(".codex/session_index.jsonl");
+    read_codex_thread_name(&index_path, session_id)
+}
+
+fn codex_summary(source_session_id: &str, first_user_message: &str) -> String {
+    codex_thread_name(source_session_id)
+        .unwrap_or_else(|| truncate(first_user_message.trim(), 180))
+}
+
 fn extract_changed_files(value: &Value) -> Vec<String> {
     let mut files = BTreeSet::new();
     collect_changed_files(value, &mut files);
@@ -307,11 +367,14 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                     }
                     event_user_message_count += 1;
                     if first_user_message.is_empty() {
-                        first_user_message = payload
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string();
+                        capture_summary_candidate(
+                            &mut first_user_message,
+                            payload
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                        );
                     }
                 }
                 "agent_message" => {
@@ -398,7 +461,10 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
                         response_user_message_count += 1;
                         if first_user_message.is_empty() {
                             if let Some(content) = payload.get("content") {
-                                first_user_message = content_to_text(content);
+                                capture_summary_candidate(
+                                    &mut first_user_message,
+                                    content_to_text(content),
+                                );
                             }
                         }
                     }
@@ -466,6 +532,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
         &first_user_message,
         "",
     );
+    let summary = codex_summary(&source_session_id, &first_user_message);
 
     Ok(Some(SessionRecord {
         id: format!("codex:{source_session_id}"),
@@ -502,7 +569,7 @@ pub fn parse_codex_file(file_path: &Path) -> anyhow::Result<Option<SessionRecord
         repair_intervals: Vec::new(),
         time_fields: TimeFields::default(),
         value: Default::default(),
-        summary: truncate(&first_user_message, 180),
+        summary,
         source_file: file_path.display().to_string(),
         git_branch: git.branch,
         git_dirty: git.dirty,
@@ -568,6 +635,43 @@ mod tests {
             .iter()
             .any(|file| file.ends_with("src-tauri/src/main.rs")));
         assert!(!files.iter().any(|file| file.contains("node_modules")));
+    }
+
+    #[test]
+    fn reads_latest_codex_thread_name_from_session_index() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let index_path = tempdir.path().join("session_index.jsonl");
+        fs::write(
+            &index_path,
+            r#"{"id":"session-1","thread_name":"启动项目","updated_at":"2026-06-06T07:59:53.967543Z"}
+{"id":"session-2","thread_name":"别的任务","updated_at":"2026-06-06T08:01:41.779903Z"}
+{"id":"session-1","thread_name":"功能迭代","updated_at":"2026-06-06T08:34:30.764189Z"}
+"#,
+        )
+        .expect("write index");
+
+        assert_eq!(
+            read_codex_thread_name(&index_path, "session-1").as_deref(),
+            Some("功能迭代")
+        );
+    }
+
+    #[test]
+    fn skips_context_messages_for_summary_candidate() {
+        let mut summary = String::new();
+
+        capture_summary_candidate(
+            &mut summary,
+            "<environment_context><cwd>/Users/edge/work/sessionary</cwd></environment_context>"
+                .to_string(),
+        );
+        capture_summary_candidate(
+            &mut summary,
+            "# AGENTS.md instructions for /Users/edge/work/sessionary".to_string(),
+        );
+        capture_summary_candidate(&mut summary, "改一下收件箱展示标题".to_string());
+
+        assert_eq!(summary, "改一下收件箱展示标题");
     }
 
     #[test]
