@@ -914,32 +914,6 @@ pub struct BackupResult {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ReleaseCheckStatus {
-    Pass,
-    Warning,
-    Fail,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ReleaseCheck {
-    pub id: String,
-    pub label: String,
-    pub status: ReleaseCheckStatus,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ReleaseReadinessResult {
-    pub checked_at: String,
-    pub version: String,
-    pub build_command: String,
-    pub checks: Vec<ReleaseCheck>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanResult {

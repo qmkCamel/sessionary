@@ -450,7 +450,6 @@ Weekly Report 使用 `week_range(date)` 取周一到周日窗口，直接查询�
 
 - Backup：复制 SQLite 到 app data backups；Keychain token 不包含在 SQLite 备份中。
 - Restore：先跑 SQLite `PRAGMA integrity_check`，恢复前创建 safety backup。
-- Release readiness：读取 `package.json` 与 `src-tauri/tauri.conf.json`，检查版本、bundle、icons、build 配置、签名环境变量。
 - Integration diagnostics：检查 token 是否存在、API 是否可达、repo/issue 能否解析；这是操作诊断，不属于 DayMetrics。
 
 ## 剩余限制或容易误读的地方

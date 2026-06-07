@@ -5,6 +5,7 @@ import { useTranslation } from "../app/translation";
 import { navItems, sourceLabels, statusKeys, valueCategoryKeys } from "../app/labels";
 import { dateTimeLabel, secondsLabel } from "../app/format";
 import { openLoopCount } from "../app/operating";
+import brandMarkUrl from "../assets/brand/sessionary-mark.svg";
 
 export function statusIcon(status: SessionStatus) {
   if (status === "useful" || status === "repaired") return <Check size={14} />;
@@ -111,8 +112,11 @@ export function AppSidebar({
   return (
     <aside className="sidebar">
       <div className="brand">
-        <strong>Sessionary</strong>
-        <span>{t("brand.tagline")}</span>
+        <img className="brand-mark" src={brandMarkUrl} alt="" aria-hidden="true" />
+        <div className="brand-copy">
+          <strong>Sessionary</strong>
+          <span>{t("brand.tagline")}</span>
+        </div>
       </div>
       <input className="date-input" type="date" value={date} onChange={(event) => onDateChange(event.target.value)} />
       <nav aria-label="Sessionary">

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Sessionary app icon</title>
+  <desc id="desc">A calm paper app icon showing a local AI coding session ledger.</desc>
+  <defs>
+    <linearGradient id="paper" x1="44" y1="18" x2="214" y2="238" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef1ed"/>
+    </linearGradient>
+    <filter id="shadow" x="20" y="18" width="216" height="220" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="12" stdDeviation="10" flood-color="#1d2527" flood-opacity="0.14"/>
+    </filter>
+  </defs>
+  <rect x="10" y="10" width="236" height="236" rx="48" fill="#fbfbf8"/>
+  <rect x="10" y="10" width="236" height="236" rx="48" fill="none" stroke="#d9ddd5" stroke-width="4"/>
+  <g filter="url(#shadow)">
+    <rect x="59" y="42" width="138" height="172" rx="26" fill="url(#paper)" stroke="#1d2527" stroke-width="9"/>
+    <path d="M88 80H168" stroke="#d9ddd5" stroke-width="10" stroke-linecap="round"/>
+    <path d="M88 121H168" stroke="#d9ddd5" stroke-width="10" stroke-linecap="round"/>
+    <path d="M88 162H168" stroke="#d9ddd5" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="88" cy="80" r="11" fill="#2f7770"/>
+    <circle cx="168" cy="121" r="11" fill="#2d67b4"/>
+    <circle cx="88" cy="162" r="11" fill="#a8671b"/>
+    <rect x="99" y="68" width="75" height="24" rx="12" fill="#2f7770"/>
+    <rect x="76" y="109" width="80" height="24" rx="12" fill="#2d67b4"/>
+    <rect x="99" y="150" width="75" height="24" rx="12" fill="#a8671b"/>
+    <path d="M80 192H176" stroke="#1d2527" stroke-width="10" stroke-linecap="round"/>
+  </g>
+</svg>

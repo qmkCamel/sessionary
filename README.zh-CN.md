@@ -11,8 +11,8 @@ session 跑过、哪些工作发生了重叠，以及哪些 session 还需要 re
 
 > 状态：v1.0 本地 operating review。应用目前覆盖本地 session 价值复盘、人工时间修正、
 > 并行 workflow 复盘、轻量交付关联、PR/CI/issue 归因，以及 AI delegation playbook。
-> 发布准备工作覆盖 Keychain 凭据、备份/恢复、集成诊断和本地打包检查。签名、自动更新
-> 和团队功能尚未就绪。
+> 维护者发布准备覆盖 Keychain 凭据、备份/恢复和集成诊断。本地打包步骤单独文档化；
+> 签名、自动更新和团队功能尚未就绪。
 
 ## 截图
 
@@ -123,7 +123,7 @@ npm test
 - [数据口径说明](docs/data-metric-definitions.md)
 - [开发者时间统计口径](docs/developer-time-metrics.md)
 - [面向用户的时间统计说明](docs/user-facing-time-metrics.md)
-- [发布准备](docs/release-readiness.md)
+- [维护者发布流程](docs/release-readiness.md)
 - [路线图](docs/roadmap.md)
 
 历史规划快照保存在 [docs/archive](docs/archive/2026-05-19-mvp/README.md)。

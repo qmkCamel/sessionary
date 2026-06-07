@@ -7,13 +7,12 @@ mod ingest;
 mod integrations;
 mod models;
 mod parsers;
-mod release;
 mod report;
 mod util;
 
 use models::{
     AppSettings, BackupResult, DayLedger, IntegrationDiagnosticsResult, IntegrationSyncResult,
-    ReleaseReadinessResult, ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus,
+    ReportResult, ScanResult, SessionPatch, SessionRecord, SessionStatus,
 };
 
 #[tauri::command]
@@ -109,11 +108,6 @@ fn restore_backup(path: String) -> Result<BackupResult, String> {
 }
 
 #[tauri::command]
-fn get_release_readiness() -> Result<ReleaseReadinessResult, String> {
-    release::get_release_readiness().map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn generate_report(date: String, locale: Option<String>) -> Result<ReportResult, String> {
     report::build_report(&date, locale.as_deref()).map_err(|error| error.to_string())
 }
@@ -151,7 +145,6 @@ fn main() {
             diagnose_integrations,
             create_backup,
             restore_backup,
-            get_release_readiness,
             generate_report,
             export_report,
             generate_weekly_report,

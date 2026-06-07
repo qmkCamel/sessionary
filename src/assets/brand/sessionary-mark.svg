@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Sessionary mark</title>
+  <desc id="desc">A ledger card with local session timeline blocks.</desc>
+  <rect x="12" y="7" width="40" height="50" rx="9" fill="#ffffff" stroke="#1d2527" stroke-width="3.25"/>
+  <path d="M22 17.5H42" stroke="#d9ddd5" stroke-width="3" stroke-linecap="round"/>
+  <path d="M22 30.5H42" stroke="#d9ddd5" stroke-width="3" stroke-linecap="round"/>
+  <path d="M22 43.5H42" stroke="#d9ddd5" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="22" cy="17.5" r="3.5" fill="#2f7770"/>
+  <circle cx="42" cy="30.5" r="3.5" fill="#2d67b4"/>
+  <circle cx="22" cy="43.5" r="3.5" fill="#a8671b"/>
+  <rect x="25" y="14" width="20" height="7" rx="3.5" fill="#2f7770"/>
+  <rect x="19" y="27" width="22" height="7" rx="3.5" fill="#2d67b4"/>
+  <rect x="25" y="40" width="20" height="7" rx="3.5" fill="#a8671b"/>
+  <path d="M18 52h28" stroke="#1d2527" stroke-width="3.25" stroke-linecap="round"/>
+</svg>

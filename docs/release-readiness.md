@@ -1,8 +1,10 @@
-# Sessionary Release Readiness
+# Sessionary Maintainer Release Process
 
 日期：2026-05-22
 
 本阶段把 Sessionary 的日用与发布风险收敛到四个方面：凭据安全、集成可诊断、数据可恢复、发布流程可复现。
+
+本文档是维护者发布流程说明，不是 Sessionary 产品内的通用发布检查能力。
 
 ## 发布前检查
 

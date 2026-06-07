@@ -6,7 +6,6 @@ import type {
   DayLedger,
   IntegrationDiagnosticsResult,
   IntegrationSyncResult,
-  ReleaseReadinessResult,
   ReportResult,
   ScanResult,
   SessionPatch,
@@ -18,7 +17,6 @@ import {
   fallbackDiagnoseIntegrations,
   fallbackFinishRepair,
   fallbackLedger,
-  fallbackReleaseReadiness,
   fallbackReport,
   fallbackRestoreBackup,
   fallbackScan,
@@ -92,10 +90,6 @@ export async function createBackup(): Promise<BackupResult> {
 
 export async function restoreBackup(path: string): Promise<BackupResult> {
   return invokeOrFallback("restore_backup", { path }, () => fallbackRestoreBackup(path));
-}
-
-export async function getReleaseReadiness(): Promise<ReleaseReadinessResult> {
-  return invokeOrFallback("get_release_readiness", undefined, fallbackReleaseReadiness);
 }
 
 export async function generateReport(date: string, locale: Locale = "en"): Promise<ReportResult> {

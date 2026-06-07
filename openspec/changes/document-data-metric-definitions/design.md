@@ -22,7 +22,7 @@
 - Delivery review：commit、dirty、absorbed、test command、PR/issue/CI。
 - Operating review：success rate、task type、tool performance、playbook。
 - Report：Daily / Weekly Markdown。
-- 非 session ledger 数据：backup、restore、release readiness、diagnostics。
+- 非 session ledger 数据：backup、restore、diagnostics。
 
 ## 审计方式
 

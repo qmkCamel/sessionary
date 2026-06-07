@@ -10,7 +10,6 @@ import {
   generateReport,
   generateWeeklyReport,
   getDay,
-  getReleaseReadiness,
   getSettings,
   latestDate,
   patchSession,
@@ -29,7 +28,6 @@ import type {
   IntegrationDiagnosticsResult,
   IntegrationSyncResult,
   OverlapInterval,
-  ReleaseReadinessResult,
   SessionPatch,
   SessionRecord,
   SessionStatus
@@ -73,8 +71,6 @@ export function App() {
   const [backupWorking, setBackupWorking] = useState(false);
   const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
   const [restorePath, setRestorePath] = useState("");
-  const [releaseChecking, setReleaseChecking] = useState(false);
-  const [releaseReadiness, setReleaseReadiness] = useState<ReleaseReadinessResult | null>(null);
   const [zoomMinutes, setZoomMinutes] = useState<ZoomMinutes>(30);
   const [selectedOverlap, setSelectedOverlap] = useState<OverlapInterval>();
   const [selectedRange, setSelectedRange] = useState<RangeSelection>();
@@ -311,18 +307,6 @@ export function App() {
     }
   };
 
-  const runReleaseCheck = async () => {
-    setError(undefined);
-    setReleaseChecking(true);
-    try {
-      setReleaseReadiness(await getReleaseReadiness());
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    } finally {
-      setReleaseChecking(false);
-    }
-  };
-
   const runStartReview = async (session: SessionRecord) => {
     const updated = await startReview(session.id);
     const nextLedger = await getDay(date || ledger?.metrics.date);
@@ -515,7 +499,6 @@ export function App() {
               onDiagnoseIntegrations={() => void runIntegrationDiagnostics()}
               onCreateBackup={() => void runCreateBackup()}
               onRestoreBackup={() => void runRestoreBackup()}
-              onCheckRelease={() => void runReleaseCheck()}
               integrationSyncing={integrationSyncing}
               integrationSyncResult={integrationSyncResult}
               integrationDiagnostics={integrationDiagnostics}
@@ -524,8 +507,6 @@ export function App() {
               backupWorking={backupWorking}
               restorePath={restorePath}
               onRestorePathChange={setRestorePath}
-              releaseReadiness={releaseReadiness}
-              releaseChecking={releaseChecking}
             />
           )}
         </section>

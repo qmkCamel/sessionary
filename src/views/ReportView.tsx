@@ -1,4 +1,5 @@
 import { Clipboard, Download, RefreshCw } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import type { DayLedger } from "../shared/types";
 import type { ReportMode } from "../app/types";
 import { compactNumber, costLabel, percentLabel, secondsLabel } from "../app/format";
@@ -217,6 +218,20 @@ export function ReportView({
   onExport: () => void;
 }) {
   const t = useTranslation();
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  useLayoutEffect(() => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const syncEditorHeight = () => {
+      editor.style.height = "auto";
+      editor.style.height = `${Math.max(editor.scrollHeight, 560)}px`;
+    };
+    syncEditorHeight();
+    window.addEventListener("resize", syncEditorHeight);
+    return () => window.removeEventListener("resize", syncEditorHeight);
+  }, [markdown, mode]);
+
   return (
     <main className="workspace report-view">
       <div className="page-title">
@@ -247,7 +262,12 @@ export function ReportView({
       </div>
       <div className="report-layout">
         <section className="report-document">
-          <textarea className="report-editor" value={markdown} onChange={(event) => onChange(event.target.value)} />
+          <textarea
+            ref={editorRef}
+            className="report-editor"
+            value={markdown}
+            onChange={(event) => onChange(event.target.value)}
+          />
           {exportedPath && <p className="export-path">{t("report.exportedTo")} {exportedPath}</p>}
         </section>
         <ReportOverview ledger={ledger} />

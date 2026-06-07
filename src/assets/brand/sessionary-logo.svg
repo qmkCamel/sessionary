@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 96" role="img" aria-labelledby="title desc">
+  <title id="title">Sessionary logo</title>
+  <desc id="desc">Sessionary wordmark with a ledger-style session mark.</desc>
+  <rect x="14" y="13" width="58" height="70" rx="13" fill="#ffffff" stroke="#1d2527" stroke-width="4"/>
+  <path d="M28 29H58M28 48H58M28 67H58" stroke="#d9ddd5" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="28" cy="29" r="4.5" fill="#2f7770"/>
+  <circle cx="58" cy="48" r="4.5" fill="#2d67b4"/>
+  <circle cx="28" cy="67" r="4.5" fill="#a8671b"/>
+  <rect x="33" y="24" width="30" height="10" rx="5" fill="#2f7770"/>
+  <rect x="23" y="43" width="32" height="10" rx="5" fill="#2d67b4"/>
+  <rect x="33" y="62" width="30" height="10" rx="5" fill="#a8671b"/>
+  <path d="M23 77h40" stroke="#1d2527" stroke-width="4" stroke-linecap="round"/>
+  <text x="92" y="58" fill="#1d2527" font-family="Avenir Next, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="38" font-weight="700" letter-spacing="0">Sessionary</text>
+  <text x="94" y="78" fill="#6f7a79" font-family="Avenir Next, Segoe UI, Helvetica Neue, Arial, sans-serif" font-size="13" font-weight="600" letter-spacing="0">Local AI coding session ledger</text>
+</svg>

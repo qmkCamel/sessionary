@@ -15,7 +15,6 @@ import type {
   PlaybookItem,
   ProjectSummary,
   ReportResult,
-  ReleaseReadinessResult,
   ScanResult,
   SessionPatch,
   SessionRecord,
@@ -920,20 +919,6 @@ export function fallbackRestoreBackup(path: string): BackupResult {
     bytes: 128000,
     createdAt: new Date().toISOString(),
     message: "Backup restored from fallback path."
-  };
-}
-
-export function fallbackReleaseReadiness(): ReleaseReadinessResult {
-  return {
-    checkedAt: new Date().toISOString(),
-    version: "1.0.0",
-    buildCommand: "npm run tauri:build",
-    checks: [
-      { id: "version", label: "Package and Tauri versions match", status: "pass", detail: "1.0.0" },
-      { id: "bundle-active", label: "Tauri bundle is active", status: "pass", detail: "Required for npm run tauri:build" },
-      { id: "icons", label: "Bundle icons configured", status: "pass", detail: "icons/icon.png" },
-      { id: "signing", label: "Apple signing identity configured", status: "warning", detail: "Set APPLE_SIGNING_IDENTITY for signed builds" }
-    ]
   };
 }
 

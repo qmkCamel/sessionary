@@ -439,22 +439,6 @@ export interface BackupResult {
   message: string;
 }
 
-export type ReleaseCheckStatus = "pass" | "warning" | "fail";
-
-export interface ReleaseCheck {
-  id: string;
-  label: string;
-  status: ReleaseCheckStatus;
-  detail: string;
-}
-
-export interface ReleaseReadinessResult {
-  checkedAt: string;
-  version: string;
-  buildCommand: string;
-  checks: ReleaseCheck[];
-}
-
 export interface ReportResult {
   markdown: string;
   exportedPath?: string;

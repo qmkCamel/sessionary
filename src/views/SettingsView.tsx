@@ -1,11 +1,10 @@
-import { Activity, Check, Download, RefreshCw } from "lucide-react";
+import { Activity, Download, RefreshCw } from "lucide-react";
 import type { LanguageSetting, TranslationKey } from "../i18n";
 import type {
   AppSettings,
   BackupResult,
   IntegrationDiagnosticsResult,
-  IntegrationSyncResult,
-  ReleaseReadinessResult
+  IntegrationSyncResult
 } from "../shared/types";
 import { byteLabel } from "../app/format";
 import { sourceLabels } from "../app/labels";
@@ -20,7 +19,6 @@ export function SettingsEditor({
   onDiagnoseIntegrations,
   onCreateBackup,
   onRestoreBackup,
-  onCheckRelease,
   integrationSyncing = false,
   integrationSyncResult,
   integrationDiagnostics,
@@ -29,8 +27,6 @@ export function SettingsEditor({
   backupWorking = false,
   restorePath,
   onRestorePathChange,
-  releaseReadiness,
-  releaseChecking = false,
   compact = false
 }: {
   settings: AppSettings;
@@ -41,7 +37,6 @@ export function SettingsEditor({
   onDiagnoseIntegrations?: () => void;
   onCreateBackup?: () => void;
   onRestoreBackup?: () => void;
-  onCheckRelease?: () => void;
   integrationSyncing?: boolean;
   integrationSyncResult?: IntegrationSyncResult | null;
   integrationDiagnostics?: IntegrationDiagnosticsResult | null;
@@ -50,8 +45,6 @@ export function SettingsEditor({
   backupWorking?: boolean;
   restorePath?: string;
   onRestorePathChange?: (value: string) => void;
-  releaseReadiness?: ReleaseReadinessResult | null;
-  releaseChecking?: boolean;
   compact?: boolean;
 }) {
   const t = useTranslation();
@@ -98,7 +91,7 @@ export function SettingsEditor({
 
   return (
     <div className={compact ? "settings-editor compact" : "settings-editor"}>
-      <section className="panel">
+      <section className="panel settings-language-panel">
         <div className="panel-header">
           <h2>{t("settings.language")}</h2>
           <span>{t("settings.languageHint")}</span>
@@ -115,29 +108,43 @@ export function SettingsEditor({
           ))}
         </div>
       </section>
-      {settings.sourceConfigs.map((config) => (
-        <section className="panel" key={config.source}>
-          <div className="panel-header">
-            <h2>{sourceLabels[config.source]}</h2>
-            <label className="switch">
-              <input type="checkbox" checked={config.enabled} onChange={() => toggleSource(config.source)} />
-              <span>{config.enabled ? t("common.enabled") : t("common.off")}</span>
-            </label>
-          </div>
-          <textarea
-            value={config.paths.join("\n")}
-            onChange={(event) => updatePaths(config.source, event.target.value)}
-            spellCheck={false}
-          />
-        </section>
-      ))}
-      <section className="panel">
+      <section className="panel settings-sources-panel">
+        <div className="panel-header">
+          <h2>{t("settings.sources")}</h2>
+          <span>{settings.sourceConfigs.length} {t("settings.sources")}</span>
+        </div>
+        <div className="settings-source-grid">
+          {settings.sourceConfigs.map((config) => (
+            <article className="settings-source-card" key={config.source}>
+              <div className="settings-card-head">
+                <div>
+                  <h3>{sourceLabels[config.source]}</h3>
+                </div>
+                <label className="switch">
+                  <input type="checkbox" checked={config.enabled} onChange={() => toggleSource(config.source)} />
+                  <span className="switch-track" aria-hidden="true">
+                    <span className="switch-thumb" />
+                  </span>
+                  <span>{config.enabled ? t("common.enabled") : t("common.off")}</span>
+                </label>
+              </div>
+              <textarea
+                value={config.paths.join("\n")}
+                onChange={(event) => updatePaths(config.source, event.target.value)}
+                spellCheck={false}
+              />
+            </article>
+          ))}
+        </div>
+      </section>
+      <section className="panel settings-project-roots-panel">
         <div className="panel-header">
           <h2>{t("settings.projectRoots")}</h2>
           <span>{t("common.optional")}</span>
         </div>
         <textarea
           value={settings.projectRoots.join("\n")}
+          placeholder={t("settings.projectRootsPlaceholder")}
           onChange={(event) =>
             onChange({
               ...settings,
@@ -176,6 +183,9 @@ export function SettingsEditor({
                         })
                       }
                     />
+                    <span className="switch-track" aria-hidden="true">
+                      <span className="switch-thumb" />
+                    </span>
                     <span>{settings.integrationSettings[provider].enabled ? t("common.enabled") : t("common.off")}</span>
                   </label>
                 </div>
@@ -203,7 +213,7 @@ export function SettingsEditor({
               </div>
             ))}
           </div>
-          <div className="release-actions">
+          <div className="settings-action-row">
             <button className="sync-button" onClick={onSyncIntegrations} disabled={integrationSyncing}>
               <RefreshCw className={integrationSyncing ? "spin" : ""} size={15} />
               {integrationSyncing ? t("settings.syncingIntegrations") : t("settings.syncIntegrations")}
@@ -231,14 +241,14 @@ export function SettingsEditor({
         </section>
       )}
       {!compact && (
-        <section className="panel release-panel">
+        <section className="panel settings-backup-panel">
           <div className="panel-header">
             <div>
               <h2>{t("settings.backupRestore")}</h2>
               <span>{t("settings.backupHint")}</span>
             </div>
           </div>
-          <div className="release-actions">
+          <div className="settings-action-row">
             <button className="sync-button" onClick={onCreateBackup} disabled={backupWorking}>
               <Download size={15} />
               {t("settings.createBackup")}
@@ -264,33 +274,6 @@ export function SettingsEditor({
           </button>
         </section>
       )}
-      {!compact && (
-        <section className="panel release-panel">
-          <div className="panel-header">
-            <div>
-              <h2>{t("settings.releaseReadiness")}</h2>
-              <span>{t("settings.releaseHint")}</span>
-            </div>
-            {releaseReadiness && <span>{releaseReadiness.version}</span>}
-          </div>
-          <button className="sync-button" onClick={onCheckRelease} disabled={releaseChecking}>
-            <Check size={15} />
-            {releaseChecking ? t("settings.checkingRelease") : t("settings.checkRelease")}
-          </button>
-          {releaseReadiness && (
-            <div className="release-check-list">
-              {releaseReadiness.checks.map((check) => (
-                <div className={`release-check ${check.status}`} key={check.id}>
-                  <strong>{check.label}</strong>
-                  <span>{check.status}</span>
-                  <small>{check.detail}</small>
-                </div>
-              ))}
-              <code>{releaseReadiness.buildCommand}</code>
-            </div>
-          )}
-        </section>
-      )}
       <div className="settings-actions">
         <button className="primary-button" onClick={onSave}>{t("common.save")}</button>
         {onScan && <button onClick={onScan}>{t("common.saveAndScan")}</button>}
@@ -308,7 +291,6 @@ export function SettingsView({
   onDiagnoseIntegrations,
   onCreateBackup,
   onRestoreBackup,
-  onCheckRelease,
   integrationSyncing,
   integrationSyncResult,
   integrationDiagnostics,
@@ -316,9 +298,7 @@ export function SettingsView({
   backupResult,
   backupWorking,
   restorePath,
-  onRestorePathChange,
-  releaseReadiness,
-  releaseChecking
+  onRestorePathChange
 }: {
   settings: AppSettings;
   onChange: (settings: AppSettings) => void;
@@ -328,7 +308,6 @@ export function SettingsView({
   onDiagnoseIntegrations: () => void;
   onCreateBackup: () => void;
   onRestoreBackup: () => void;
-  onCheckRelease: () => void;
   integrationSyncing: boolean;
   integrationSyncResult: IntegrationSyncResult | null;
   integrationDiagnostics: IntegrationDiagnosticsResult | null;
@@ -337,12 +316,10 @@ export function SettingsView({
   backupWorking: boolean;
   restorePath: string;
   onRestorePathChange: (value: string) => void;
-  releaseReadiness: ReleaseReadinessResult | null;
-  releaseChecking: boolean;
 }) {
   const t = useTranslation();
   return (
-    <main className="workspace">
+    <main className="workspace settings-workspace">
       <div className="page-title">
         <div>
           <p>{t("common.localOnly")}</p>
@@ -358,7 +335,6 @@ export function SettingsView({
         onDiagnoseIntegrations={onDiagnoseIntegrations}
         onCreateBackup={onCreateBackup}
         onRestoreBackup={onRestoreBackup}
-        onCheckRelease={onCheckRelease}
         integrationSyncing={integrationSyncing}
         integrationSyncResult={integrationSyncResult}
         integrationDiagnostics={integrationDiagnostics}
@@ -367,8 +343,6 @@ export function SettingsView({
         backupWorking={backupWorking}
         restorePath={restorePath}
         onRestorePathChange={onRestorePathChange}
-        releaseReadiness={releaseReadiness}
-        releaseChecking={releaseChecking}
       />
     </main>
   );

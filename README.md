@@ -13,9 +13,9 @@ need review, repair, or follow-up.
 > Status: v1.0 local operating review. The app now covers local session value
 > review, human-time correction, parallel workflow review, lightweight delivery
 > linkage, PR/CI/issue attribution, and AI delegation playbooks.
-> Release-readiness work covers Keychain credentials, backup/restore,
-> integration diagnostics, and local packaging checks. Signing, auto-update,
-> and team features are not ready yet.
+> Maintainer readiness work covers Keychain credentials, backup/restore, and
+> integration diagnostics. Packaging steps are documented separately; signing,
+> auto-update, and team features are not ready yet.
 
 ## Screenshots
 
@@ -138,7 +138,7 @@ npm test
 - [Data metric definitions](docs/data-metric-definitions.md)
 - [Developer time metrics](docs/developer-time-metrics.md)
 - [User-facing time metrics](docs/user-facing-time-metrics.md)
-- [Release readiness](docs/release-readiness.md)
+- [Maintainer release process](docs/release-readiness.md)
 - [Roadmap](docs/roadmap.md)
 - [OpenSpec project guide](openspec/project.md)
 
